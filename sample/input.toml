@@ -1,0 +1,47 @@
+# config.toml
+# Configuration for flamelet table generation
+
+# [restart]
+# solutions_file = "flamelet_results/solutions_meta.h5"
+# solution_index = 50
+
+[mechanism]
+file = "gri30.yaml"  # Path to mechanism file
+
+[conditions]
+pressure = 101325.0   # Operating pressure in Pa
+initial_chi_st = 0.1  # Initial target scalar dissipation rate
+
+[fuel_inlet]
+composition = { CH4 = 1.0 }  # Pure methane
+temperature = 300.0          # Temperature in K
+
+[oxidizer_inlet]
+composition = { O2 = 0.21, N2 = 0.79 }  # Air
+temperature = 300.0                     # Temperature in K
+
+[solver]
+output_dir = "flamelet_results"  # Output directory
+create_plots = true              # Whether to create visualization plots
+
+# Solver options passed to compute_s_curve
+[solver.options]
+n_max = 5000                   # Maximum number of iterations
+initial_spacing = 0.6          # Initial control point spacing
+unstable_spacing = 0.95        # Control point spacing for unstable branch
+temperature_increment = 20.0   # Initial temperature increment
+max_increment = 100.0          # Maximum temperature increment
+target_delta_T_max = 20.0      # Target maximum temperature change
+max_error_count = 3            # Maximum consecutive solver errors
+strain_rate_tol = 0.01         # Minimum strain rate ratio for termination
+n_extinction_points = 10       # Number of points to solve along the extinction branch
+loglevel = 0                   # Log level for the Cantera solver
+
+# Plotting options
+[plotting.s_curve]
+x_quantity = "chi_st" # x-axis quantity: "strain_rate" or "chi_st"
+y_quantity = "T_max"  # y-axis quantity: "T_max" or "T_st"
+
+[plotting.profiles]
+# num_profiles = 10     # Number of profiles to plot
+colormap = "viridis"  # Colormap for temperature profiles

@@ -9,6 +9,7 @@ import numpy as np
 import pandas as pd
 import cantera as ct
 from scipy import interpolate
+from scipy.special import erfcinv
 
 pyplot_params = {
     "text.usetex": True,
@@ -29,8 +30,8 @@ pyplot_params = {
 class InletCondition:
     """Represents inlet conditions for fuel or oxidizer stream"""
     composition: Dict[str, float]  # Species mole fractions
-    temperature: float  # Temperature in Kelvin
-    mass_flux: float   # Mass flux in kg/m²/s
+    temperature: float             # Temperature in Kelvin
+    mass_flux: float               # Mass flux in kg/m²/s
 
 class FlameletTableGenerator:
     """Generator for flamelet calculations including unstable branch traversal.
@@ -80,14 +81,13 @@ class FlameletTableGenerator:
         self.pressure = pressure
         self.initial_chi_st = initial_chi_st
         
-        # Initialize solution variables
         self.gas = ct.Solution(self.mechanism_file)
+        self.Z_st = self._compute_stoichiometric_mixture_fraction()
         
         # Estimate appropriate domain width if not provided
         if width is None:
             # Estimate flame thickness based on thermal diffusivity and initial strain rate
-            # α ≈ χst/2 for counterflow flames
-            strain = initial_chi_st / 2.0
+            strain = self._estimate_strain_from_chi_st(initial_chi_st)
             self.gas.TPX = (
                 0.5 * (fuel_inlet.temperature + oxidizer_inlet.temperature),
                 pressure,
@@ -95,17 +95,15 @@ class FlameletTableGenerator:
             )
             thermal_diffusivity = self.gas.thermal_conductivity / (self.gas.density * self.gas.cp_mass)
             flame_thickness = np.sqrt(thermal_diffusivity / strain)
-            # Make domain width ~20x flame thickness
+            # Make domain width a multiple of flame thickness
             self.width = 20 * flame_thickness
+            self.logger.info("Setting domain width automatically to {0:.3e} m".format(self.width))
         else:
             self.width = width
         
         self.flame = None
         self.solutions = []
         self._initialize_flame()
-        
-        # Compute stoichiometric mixture fraction
-        self.Z_st = self._compute_stoichiometric_mixture_fraction()
     
     def _compute_stoichiometric_mixture_fraction(self) -> float:
         """Compute the stoichiometric mixture fraction using Bilger's definition.
@@ -167,6 +165,69 @@ class FlameletTableGenerator:
         chi_st = float(interp(self.Z_st))
 
         return chi, chi_st
+    
+    def _estimate_chi_st_from_strain(self, strain_rate: float) -> float:
+        """Estimate the stoichiometric scalar dissipation rate from a target strain rate.
+
+        Args:
+            strain_rate: Target strain rate
+        
+        Returns:
+            float: Estimated stoichiometric scalar dissipation rate
+
+        Note:
+            Uses Peters' relationship (Peters, PECS 1984)
+        """
+        chi_st = (strain_rate / np.pi) * np.exp(-2 * erfcinv(2 * self.Z_st)**2)
+        return chi_st
+
+    def _estimate_strain_from_chi_st(self, chi_st: float) -> float:
+        """Estimate the strain rate from a given stoichiometric scalar dissipation rate.
+
+        Args:
+            chi_st: Scalar dissipation rate at stoichiometric mixture fraction [1/s]
+        
+        Returns:
+            float: Estimated strain rate [1/s]
+        """
+        strain_rate = chi_st * np.pi / np.exp(-2 * erfcinv(2 * self.Z_st)**2)
+        return strain_rate
+
+    def _mdots_from_chi_st(self, chi_st: float) -> Tuple[float, float]:
+        """Compute mass fluxes for fuel and oxidizer based on target chi_st.
+        
+        Args:
+            chi_st: Target scalar dissipation rate at stoichiometric mixture fraction [1/s]
+        
+        Returns:
+            Tuple containing:
+                - mdot_fuel: Mass flux of fuel [kg/m²/s]
+                - mdot_oxidizer: Mass flux of oxidizer [kg/m²/s]
+        """
+        # Set gas state for fuel
+        self.gas.TPX = (self.fuel_inlet.temperature,
+                        self.pressure,
+                        self.fuel_inlet.composition)
+        rho_fuel = self.gas.density
+        
+        # Set gas state for oxidizer
+        self.gas.TPX = (self.oxidizer_inlet.temperature,
+                        self.pressure,
+                        self.oxidizer_inlet.composition)
+        rho_ox = self.gas.density
+        
+        # Estimate strain rate needed for target chi_st
+        target_strain = self._estimate_strain_from_chi_st(chi_st)
+        
+        # Set velocities to achieve target strain while maintaining momentum balance
+        v_fuel = np.sqrt(target_strain * self.width / 4)
+        v_ox = v_fuel * np.sqrt(rho_fuel / rho_ox)
+        
+        # Convert to mass fluxes
+        mdot_fuel = rho_fuel * v_fuel
+        mdot_oxidizer = rho_ox * v_ox
+        
+        return mdot_fuel, mdot_oxidizer
 
     def _initialize_flame(self):
         """Set up the initial counterflow diffusion flame configuration.
@@ -180,22 +241,8 @@ class FlameletTableGenerator:
         # Set operating conditions
         self.flame.P = self.pressure
         
-        # Estimate strain rate needed for target chi_st (approximate relationship)
-        target_strain = self.initial_chi_st / 2.0  # Approximate relationship: chi_st ≈ 2*a
-        
-        # Calculate mass flux to achieve target strain rate
-        # For counterflow flames: a ≈ 2*v/L where v is velocity and L is domain width
-        rho_fuel = self.gas.density
-        rho_ox = self.gas.density  # Approximation, could compute more precisely
-        
-        # Set velocities to achieve target strain while maintaining momentum balance
-        # rho_f * v_f^2 = rho_o * v_o^2
-        v_fuel = np.sqrt(target_strain * self.width / 4)  # Base velocity
-        v_ox = v_fuel * np.sqrt(rho_fuel / rho_ox)  # Adjusted for momentum balance
-        
-        # Convert to mass fluxes
-        mdot_fuel = rho_fuel * v_fuel
-        mdot_ox = rho_ox * v_ox
+        # Use the new method to compute mass fluxes
+        mdot_fuel, mdot_ox = self._mdots_from_chi_st(self.initial_chi_st)
         
         # Set inlet conditions
         self.flame.fuel_inlet.mdot = mdot_fuel
@@ -208,6 +255,42 @@ class FlameletTableGenerator:
         
         # Set refinement parameters
         self.flame.set_refine_criteria(ratio=4.0, slope=0.1, curve=0.2, prune=0.05)
+    
+    def _update_flame_width(self):
+        """Update the flame width and reinitialize the flame object."""
+        # Compute the current flame thickness
+        strain = self._estimate_strain_from_chi_st(self.initial_chi_st)
+        thermal_diffusivity = self.gas.thermal_conductivity / (self.gas.density * self.gas.cp_mass)
+        flame_thickness = np.sqrt(thermal_diffusivity / strain)
+        
+        # Set new width to be approximately 10 times the flame thickness
+        new_width = 10 * flame_thickness
+        self.logger.info(f"Updating domain width from {self.width:.3e} m to {new_width:.3e} m")
+        
+        # Reinitialize the flame object with the new width
+        old_width = self.width
+        self.width = new_width
+        self.flame = ct.CounterflowDiffusionFlame(self.gas, width=self.width)
+        
+        # Interpolate old solution onto the new domain
+        if self.solutions:
+            old_solution = self.solutions[-1]['state']
+            old_grid = self.flame.grid
+            
+            # Calculate the new grid based on the new width
+            new_grid = np.linspace(-self.width / 2, self.width / 2, len(old_grid))
+            
+            # Find the center of the flame in the old grid
+            flame_center_index = np.argmax(old_solution.T)  # Assuming temperature profile indicates flame center
+            flame_center_position = old_grid[flame_center_index]
+            
+            # Shift the old grid to align the flame center with the new grid
+            shift_amount = flame_center_position - (self.width / 2)
+            shifted_old_grid = old_grid - shift_amount
+            
+            # Interpolate the old state onto the new grid
+            new_state = interpolate.interp1d(shifted_old_grid, old_solution, axis=0, fill_value="extrapolate")(new_grid)
+            self.flame.from_array(new_state)
     
     def compute_s_curve(
         self,
@@ -244,7 +327,8 @@ class FlameletTableGenerator:
             chi_st_min=chi_st_min,
             chi_st_max=chi_st_max,
             n_points=n_extinction_points,
-            output_path=output_path
+            output_path=output_path,
+            loglevel=kwargs.get('loglevel')
         )
         
         return ignited_data + extinct_data
@@ -261,7 +345,7 @@ class FlameletTableGenerator:
         target_delta_T_max: float = 20.0,
         max_error_count: int = 3,
         strain_rate_tol: float = 0.10,
-        loglevel: int = 1,
+        loglevel: int = 0,
     ) -> List[Dict]:
         """Compute upper (stable) and middle (unstable) branches of the S-curve.
         
@@ -350,6 +434,9 @@ class FlameletTableGenerator:
 
         # Rest of the method remains the same, but change the iteration range
         for i in range(start_iteration, n_max):
+            # Update flame width before each solution attempt
+            # self._update_flame_width()
+            
             spacing = unstable_spacing if strain_rate <= 0.98 * a_max else initial_spacing
             control_temperature = (np.min(self.flame.T) + 
                                 spacing * (np.max(self.flame.T) - np.min(self.flame.T)))
@@ -406,15 +493,6 @@ class FlameletTableGenerator:
                     f"Trying again with dT = {temperature_increment:.2f}"
                 )
             
-            # Save flame profiles if requested
-            if output_path and ct.hdf_support():
-                profile_file = output_path / 'flame_profiles.h5'
-                self.flame.save(
-                    profile_file,
-                    name=f'solution_{i:04d}',
-                    overwrite=True
-                )
-            
             # Compute mixture fraction and scalar dissipation
             Z = self._compute_mixture_fraction()
             chi, chi_st = self._compute_scalar_dissipation(Z)
@@ -462,9 +540,6 @@ class FlameletTableGenerator:
                 f"chi_st = {chi_st:.4e}, strain_rate = {strain_rate:.2f}"
             )
 
-            # DEBUG
-            break
-
         self.logger.info(f'Stopped after {i} iterations')
         return data
 
@@ -473,7 +548,8 @@ class FlameletTableGenerator:
         chi_st_min: float,
         chi_st_max: float,
         n_points: int = 10,
-        output_path: Optional[Path] = None
+        output_path: Optional[Path] = None,
+        loglevel: int = 0
     ) -> List[Dict]:
         """Compute the extinction (lower) branch of the S-curve.
         
@@ -487,6 +563,7 @@ class FlameletTableGenerator:
             chi_st_max: Maximum scalar dissipation rate at stoichiometric mixture fraction [1/s]
             n_points: Number of points to compute along the extinction branch
             output_path: Optional directory path to save solution files
+            loglevel: Cantera solver log level (0-3)
         
         Returns:
             List[Dict]: List of solution metadata dictionaries containing properties
@@ -534,27 +611,15 @@ class FlameletTableGenerator:
         for k, species in enumerate(self.gas.species_names):
             self.flame.set_profile(species, normalized_grid, Y_profile[k,:])
         
-        # Compute initial solution
-        self.logger.info('Computing the initial solution')
-        self.flame.solve(loglevel=0, auto=False)
-        
         for chi_st in chi_st_values:
             self.logger.info(f"Computing extinction branch solution at chi_st = {chi_st:.2e}")
             
-            # Estimate strain rate needed for target chi_st
-            target_strain = chi_st / 2.0
-            
-            # Adjust mass fluxes to achieve target strain
-            rho_fuel = self.gas.density
-            rho_ox = self.gas.density
-            v_fuel = np.sqrt(target_strain * self.width / 4)
-            v_ox = v_fuel * np.sqrt(rho_fuel / rho_ox)
-            
-            self.flame.fuel_inlet.mdot = rho_fuel * v_fuel
-            self.flame.oxidizer_inlet.mdot = rho_ox * v_ox
+            mdot_fuel, mdot_oxidizer = self._mdots_from_chi_st(chi_st)
+            self.flame.fuel_inlet.mdot = mdot_fuel
+            self.flame.oxidizer_inlet.mdot = mdot_oxidizer
             
             try:
-                self.flame.solve(loglevel=0, auto=True)
+                self.flame.solve(loglevel=loglevel, auto=True)
                 
                 # Compute solution properties
                 Z = self._compute_mixture_fraction()
@@ -602,19 +667,12 @@ class FlameletTableGenerator:
             output_path: Directory path where files will be saved
             solution_index: Index of the solution being saved
         """
+        solutions_file = output_path / 'solutions.h5'
         solution = self.solutions[solution_index]
-        
-        # Save flame profiles
-        profile_file = output_path / 'flame_profiles.h5'
-        self.flame.save(
-            profile_file,
-            name=f'solution_{solution_index:04d}',
-            overwrite=True
-        )
-        
-        solutions_file = output_path / 'solutions_meta.h5'
+        meta_name = f'meta_{solution_index:04d}'
+        state_name = f'solution_state_{solution_index:04d}'
 
-        # If this is the first solution, create the meta file, overwriting if necessary
+        # If this is the first solution, create the file, overwriting if necessary
         if solution_index == 0:
             # Write condition parameters
             with h5py.File(solutions_file, 'w') as f:
@@ -635,18 +693,17 @@ class FlameletTableGenerator:
                     }
                 }
                 f.attrs['parameters'] = json.dumps(params)
-                f.create_group('solutions')
+                f.create_group('solutions_meta')
 
         # Write the solution metadata
         with h5py.File(solutions_file, 'a') as f:
             # Delete existing solution group if it exists
-            solutions = f['solutions']
-            solution_name = f'solution_{solution_index:04d}'
-            if solution_name in solutions:
-                del solutions[solution_name]
+            meta_group = f['solutions_meta']
+            if meta_name in meta_group:
+                del meta_group[meta_name]
             
-            # Create new solution group
-            sol_group = solutions.create_group(solution_name)
+            # Create new meta group
+            sol_group = meta_group.create_group(meta_name)
             
             # Save mixture fraction and scalar dissipation
             sol_group.create_dataset('Z', data=solution['Z'])
@@ -662,6 +719,13 @@ class FlameletTableGenerator:
             
             # Save solution metadata
             sol_group.attrs['metadata'] = json.dumps(metadata)
+
+        # Write flame profile
+        solution['state'].save(
+            solutions_file,
+            name=state_name,
+            overwrite=True
+        )
 
     def save_all_solutions(self, output_path: Path):
         """Save all computed solutions to HDF5 files.
@@ -679,14 +743,11 @@ class FlameletTableGenerator:
     def load_solutions(
         cls,
         filename: str,
-        profiles_file: Optional[str] = None
     ) -> 'FlameletTableGenerator':
-        """Load a complete solution set from HDF5 files.
+        """Load a complete solution set from the HDF5 file.
         
         Args:
-            filename: Path to the main solutions HDF5 file
-            profiles_file: Path to the flame profiles HDF5 file. If None,
-                assumes 'flame_profiles.h5' in the same directory as filename
+            filename: Path to the solutions HDF5 file
         
         Returns:
             FlameletTableGenerator: New instance with loaded solutions
@@ -694,10 +755,7 @@ class FlameletTableGenerator:
         Raises:
             ValueError: If files cannot be read or are invalid
         """
-        # If profiles_file not provided, assume it's in same directory as solutions file
-        if profiles_file is None:
-            profiles_file = str(Path(filename).parent / 'flame_profiles.h5')
-        
+        # Load the metadata
         with h5py.File(filename, 'r') as f:
             # Load parameters
             params = json.loads(f.attrs['parameters'])
@@ -717,19 +775,10 @@ class FlameletTableGenerator:
             
             # Load solutions
             generator.solutions = []
-            solutions_group = f['solutions']
-            
-            # Create gas object for loading states
-            gas = ct.Solution(generator.mechanism_file)
-            
-            for sol_name in sorted(solutions_group.keys()):
-                sol_group = solutions_group[sol_name]
-                
-                # Load state from profiles file
-                state_array = ct.SolutionArray(gas)
-                state_array.restore(profiles_file, sol_name)
-                
-                # Load the solution dictionary
+            meta_group = f['solutions_meta']
+            for meta_name in sorted(meta_group.keys()):
+                sol_group = meta_group[meta_name]
+                state_array = ct.SolutionArray(generator.gas)
                 solution = {
                     'state': state_array,
                     'Z': sol_group['Z'][:],
@@ -737,11 +786,13 @@ class FlameletTableGenerator:
                     'metadata': json.loads(sol_group.attrs['metadata'])
                 }
                 generator.solutions.append(solution)
-            
-            # Set the stoichiometric mixture fraction
-            generator.Z_st = params['Z_st']
+        
+        # Load the states
+        for solution_index, solution in enumerate(generator.solutions):
+            state_name = f'solution_state_{solution_index:04d}'
+            generator.solutions[solution_index]['state'].restore(filename, state_name)
 
-            return generator
+        return generator
 
     def plot_s_curve(
         self,
@@ -846,3 +897,4 @@ class FlameletTableGenerator:
             fig.savefig(output_file, bbox_inches='tight', dpi=300)
         
         return fig, ax
+

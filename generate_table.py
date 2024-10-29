@@ -208,11 +208,6 @@ def main():
             **solver_options
         )
         
-        # Save solutions
-        solutions_file = output_dir / 'flamelet_solutions.h5'
-        logger.info(f"Saving solutions to {solutions_file}")
-        generator.save_solutions(solutions_file)
-        
         # Create plots if requested
         if config['solver'].get('create_plots', True):
             logger.info("Creating visualization plots")
