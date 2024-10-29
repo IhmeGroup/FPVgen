@@ -44,7 +44,7 @@ class FlameletTableGenerator:
         fuel_inlet (InletCondition): Fuel stream inlet conditions
         oxidizer_inlet (InletCondition): Oxidizer stream inlet conditions
         pressure (float): Operating pressure in Pa
-        width (float): Domain width in meters
+        width_ratio (float): Ratio of the domain width to the flame thickness
         initial_chi_st (float): Initial scalar dissipation rate at stoichiometric mixture fraction
         gas (ct.Solution): Cantera Solution object for the mechanism
         flame (ct.CounterflowDiffusionFlame): Cantera flame object
@@ -58,8 +58,8 @@ class FlameletTableGenerator:
         fuel_inlet: InletCondition,
         oxidizer_inlet: InletCondition,
         pressure: float,
-        width: Optional[float] = None,
-        initial_chi_st: float = 0.1,
+        width_ratio: Optional[float] = 10.0,
+        initial_chi_st: Optional[float] = 1.0e-2,
     ):
         """Initialize the flamelet generator with mechanism and conditions.
         
@@ -68,42 +68,27 @@ class FlameletTableGenerator:
             fuel_inlet: Fuel stream inlet conditions
             oxidizer_inlet: Oxidizer stream inlet conditions
             pressure: Operating pressure in Pa
-            width: Domain width in meters. If None, estimated from initial conditions
+            width_ratio: Ratio of the domain width to the flame thickness
             initial_chi_st: Initial scalar dissipation rate at stoichiometric mixture fraction
         """
         self.logger = logging.getLogger(__name__)
         self.logger.setLevel(logging.INFO)
-        
+
         # Store input parameters
         self.mechanism_file = mechanism_file
         self.fuel_inlet = fuel_inlet
         self.oxidizer_inlet = oxidizer_inlet
         self.pressure = pressure
+        self.width_ratio = width_ratio
         self.initial_chi_st = initial_chi_st
         
+        # Initialization
         self.gas = ct.Solution(self.mechanism_file)
         self.Z_st = self._compute_stoichiometric_mixture_fraction()
-        
-        # Estimate appropriate domain width if not provided
-        if width is None:
-            # Estimate flame thickness based on thermal diffusivity and initial strain rate
-            strain = self._estimate_strain_from_chi_st(initial_chi_st)
-            self.gas.TPX = (
-                0.5 * (fuel_inlet.temperature + oxidizer_inlet.temperature),
-                pressure,
-                fuel_inlet.composition
-            )
-            thermal_diffusivity = self.gas.thermal_conductivity / (self.gas.density * self.gas.cp_mass)
-            flame_thickness = np.sqrt(thermal_diffusivity / strain)
-            # Make domain width a multiple of flame thickness
-            self.width = 20 * flame_thickness
-            self.logger.info("Setting domain width automatically to {0:.3e} m".format(self.width))
-        else:
-            self.width = width
-        
+        self.width = 1.0 # Needed for initial flame construction but will be overridden
         self.flame = None
         self.solutions = []
-        self._initialize_flame()
+        self._update_flame_width(enable_two_point_control=False)
     
     def _compute_stoichiometric_mixture_fraction(self) -> float:
         """Compute the stoichiometric mixture fraction using Bilger's definition.
@@ -193,6 +178,33 @@ class FlameletTableGenerator:
         strain_rate = chi_st * np.pi / np.exp(-2 * erfcinv(2 * self.Z_st)**2)
         return strain_rate
 
+    def _estimate_flame_thickness(
+        self,
+        strain_rate: Optional[float] = None,
+        chi_st: Optional[float] = None
+    ) -> float:
+        """Estimate the flame thickness based on strain rate or chi_st.
+        
+        Args:
+            strain_rate: Optional strain rate [1/s]
+            chi_st: Optional scalar dissipation rate at stoichiometric mixture fraction [1/s]
+        
+        Returns:
+            float: Estimated flame thickness [m]
+        """
+        self.gas.TPX = (0.5 * (self.fuel_inlet.temperature + self.oxidizer_inlet.temperature),
+                        self.pressure,
+                        self.fuel_inlet.composition)
+        if strain_rate is not None:
+            thermal_diffusivity = self.gas.thermal_conductivity / (self.gas.density * self.gas.cp_mass)
+            return np.sqrt(thermal_diffusivity / strain_rate)
+        elif chi_st is not None:
+            # Estimate strain rate from chi_st
+            strain_rate = self._estimate_strain_from_chi_st(chi_st)
+            return self._estimate_flame_thickness(strain_rate=strain_rate)
+        else:
+            raise ValueError("Either strain_rate or chi_st must be provided.")
+
     def _mdots_from_chi_st(self, chi_st: float) -> Tuple[float, float]:
         """Compute mass fluxes for fuel and oxidizer based on target chi_st.
         
@@ -220,17 +232,20 @@ class FlameletTableGenerator:
         target_strain = self._estimate_strain_from_chi_st(chi_st)
         
         # Set velocities to achieve target strain while maintaining momentum balance
-        v_fuel = np.sqrt(target_strain * self.width / 4)
+        v_fuel = np.sqrt(target_strain * self.width) / 2
         v_ox = v_fuel * np.sqrt(rho_fuel / rho_ox)
         
         # Convert to mass fluxes
         mdot_fuel = rho_fuel * v_fuel
         mdot_oxidizer = rho_ox * v_ox
-        
+
         return mdot_fuel, mdot_oxidizer
 
-    def _initialize_flame(self):
+    def _initialize_flame(self, enable_two_point_control: bool = False):
         """Set up the initial counterflow diffusion flame configuration.
+
+        Args:
+            enable_two_point_control: Whether to enable two-point control
         
         Initializes the Cantera flame object with appropriate grid, inlet conditions,
         and refinement criteria. Estimates appropriate strain rate based on target
@@ -252,45 +267,90 @@ class FlameletTableGenerator:
         self.flame.oxidizer_inlet.mdot = mdot_ox
         self.flame.oxidizer_inlet.X = self.oxidizer_inlet.composition
         self.flame.oxidizer_inlet.T = self.oxidizer_inlet.temperature
-        
+
+        # Enable and configure two-point control
+        if enable_two_point_control:
+            self.flame.two_point_control_enabled = True
+            self.flame.flame.set_bounds(spread_rate=(-1e-5, 1e20))
+            self.flame.max_time_step_count = 100
+
         # Set refinement parameters
         self.flame.set_refine_criteria(ratio=4.0, slope=0.1, curve=0.2, prune=0.05)
     
-    def _update_flame_width(self):
-        """Update the flame width and reinitialize the flame object."""
+    def _update_flame_width(self, enable_two_point_control: bool = False):
+        """Update the flame width and reinitialize the flame object.
+        Args:
+            enable_two_point_control: Whether to enable two-point control
+        """
         # Compute the current flame thickness
         strain = self._estimate_strain_from_chi_st(self.initial_chi_st)
-        thermal_diffusivity = self.gas.thermal_conductivity / (self.gas.density * self.gas.cp_mass)
-        flame_thickness = np.sqrt(thermal_diffusivity / strain)
+        flame_thickness = self._estimate_flame_thickness(strain_rate=strain)
         
-        # Set new width to be approximately 10 times the flame thickness
-        new_width = 10 * flame_thickness
-        self.logger.info(f"Updating domain width from {self.width:.3e} m to {new_width:.3e} m")
+        # Compute the new width
+        old_width = self.width
+        self.width = self.width_ratio * flame_thickness
+        width_increasing = (self.width >= old_width)
+        self.logger.info(f"Updating domain width from {old_width:.3e} m to {self.width:.3e} m")
+        
+        # If flame has been solved, save the state
+        if self.flame is not None:
+            old_solution = self.flame.to_array()
+            old_mdots = (self.flame.fuel_inlet.mdot, self.flame.oxidizer_inlet.mdot)
+        else:
+            old_solution = None
         
         # Reinitialize the flame object with the new width
-        old_width = self.width
-        self.width = new_width
-        self.flame = ct.CounterflowDiffusionFlame(self.gas, width=self.width)
+        self._initialize_flame(enable_two_point_control)
         
-        # Interpolate old solution onto the new domain
-        if self.solutions:
-            old_solution = self.solutions[-1]['state']
-            old_grid = self.flame.grid
+        # Interpolate old solution onto the new domain, adjusting velocity accordingly
+        if old_solution is not None:
+            # Create interpolation functions for each variable
+            new_grid = self.flame.grid
+            new_grid_norm = new_grid / (new_grid[-1] - new_grid[0])
+            scale_factor = self.width / old_width
             
-            # Calculate the new grid based on the new width
-            new_grid = np.linspace(-self.width / 2, self.width / 2, len(old_grid))
+            # Calculate new inlet mdots to maintain strain rate
+            new_mdots = tuple(mdot * scale_factor for mdot in old_mdots)
             
-            # Find the center of the flame in the old grid
-            flame_center_index = np.argmax(old_solution.T)  # Assuming temperature profile indicates flame center
-            flame_center_position = old_grid[flame_center_index]
+            # For each variable in the solution, interpolate to new grid
+            var_names = ['velocity', 'spread_rate', 'lambda', 'Uo', 'T', 'density']
+            var_names += ['Y_' + name for name in self.gas.species_names]
+            for i, var_name in enumerate(var_names):
+                # Create interpolation function
+                old_values = getattr(old_solution, var_name)
+                interp = interpolate.interp1d(
+                    old_solution.grid, old_values,
+                    kind='cubic', bounds_error=False,
+                    fill_value=(old_values[0], old_values[-1]))
+                
+                # Get interpolated values
+                new_values = interp(new_grid)
+
+                # Handle special cases
+                if var_name in ['velocity', 'spread_rate', 'Uo']:
+                    # Scale velocity to maintain strain rate
+                    new_values *= scale_factor
+                elif var_name.startswith('Y_'):
+                    # Ensure mass fractions remain between 0 and 1
+                    new_values = np.clip(new_values, 0, 1)
+                
+                # Update the flame solution
+                self.flame.set_profile(var_name, new_grid_norm, new_values)
             
-            # Shift the old grid to align the flame center with the new grid
-            shift_amount = flame_center_position - (self.width / 2)
-            shifted_old_grid = old_grid - shift_amount
+            # Normalize mass fractions at each point
+            Y_sum = np.zeros_like(new_grid)
+            for spec in self.gas.species_names:
+                Y_sum += self.flame.Y[spec]
+            for spec in self.gas.species_names:
+                Y = self.flame.Y[spec]
+                Y_normalized = np.where(Y_sum > 0, Y / Y_sum, 0)
+                self.flame.set_profile(f'Y_{spec}', new_grid, Y_normalized)
             
-            # Interpolate the old state onto the new grid
-            new_state = interpolate.interp1d(shifted_old_grid, old_solution, axis=0, fill_value="extrapolate")(new_grid)
-            self.flame.from_array(new_state)
+            # Update inlet mass flow rates to maintain strain rate
+            self.flame.inlet_fuel.mdot = new_mdots[0]
+            self.flame.inlet_oxidizer.mdot = new_mdots[1]
+        
+        self.logger.info("Updated domain width to {0:.3e} m".format(self.width))
     
     def compute_s_curve(
         self,
@@ -423,10 +483,6 @@ class FlameletTableGenerator:
             data = []
             start_iteration = 0
 
-        # Enable and configure two-point control
-        self.flame.two_point_control_enabled = True
-        self.flame.flame.set_bounds(spread_rate=(-1e-5, 1e20))
-        self.flame.max_time_step_count = 100
         
         # Initialize error tracking
         error_count = 0
@@ -435,11 +491,11 @@ class FlameletTableGenerator:
         # Rest of the method remains the same, but change the iteration range
         for i in range(start_iteration, n_max):
             # Update flame width before each solution attempt
-            # self._update_flame_width()
+            self._update_flame_width(enable_two_point_control=True)
             
             spacing = unstable_spacing if strain_rate <= 0.98 * a_max else initial_spacing
             control_temperature = (np.min(self.flame.T) + 
-                                spacing * (np.max(self.flame.T) - np.min(self.flame.T)))
+                                   spacing * (np.max(self.flame.T) - np.min(self.flame.T)))
             
             # Store current state
             backup_state = self.flame.to_array()
@@ -612,7 +668,8 @@ class FlameletTableGenerator:
             self.flame.set_profile(species, normalized_grid, Y_profile[k,:])
         
         for chi_st in chi_st_values:
-            self.logger.info(f"Computing extinction branch solution at chi_st = {chi_st:.2e}")
+            # Update flame width before each solution attempt
+            self._update_flame_width(enable_two_point_control=True)
             
             mdot_fuel, mdot_oxidizer = self._mdots_from_chi_st(chi_st)
             self.flame.fuel_inlet.mdot = mdot_fuel
@@ -651,6 +708,12 @@ class FlameletTableGenerator:
                 
                 if output_path:
                     self.save_solution(output_path, len(self.solutions) - 1)
+                
+                # Logging after successful solution
+                self.logger.info(
+                    f"Iteration {i} completed: T_max = {T_max:.2f}, T_st = {T_st:.2f}, "
+                    f"chi_st = {chi_st:.4e}, strain_rate = {strain_rate:.2f}"
+                )
                     
             except ct.CanteraError as err:
                 self.logger.warning(f"Failed to compute solution at chi_st = {chi_st:.2e}: {err}")

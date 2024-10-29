@@ -24,7 +24,7 @@ Configuration File Format:
         - temperature: Temperature in Kelvin
     - solver: Solver configuration
         - output_dir: Output directory (optional)
-        - width: Domain width in meters (optional)
+        - width_ratio: Ratio of the domain width to the flame thickness (optional)
         - n_extinction_points: Number of extinction branch points (optional)
         - create_plots: Whether to generate plots (optional)
         - options: Additional solver options (optional)
@@ -120,9 +120,9 @@ def create_generator(config: dict) -> FlameletTableGenerator:
         mechanism_file=config['mechanism']['file'],
         fuel_inlet=fuel_inlet,
         oxidizer_inlet=oxidizer_inlet,
-        pressure=config['conditions'].get('pressure', 101325.0),
-        width=config['solver'].get('width', None),  # Now optional
-        initial_chi_st=config['conditions'].get('initial_chi_st', 0.1)
+        pressure=config['conditions'].get('pressure'),
+        width_ratio=config['solver'].get('width_ratio'),
+        initial_chi_st=config['conditions'].get('initial_chi_st')
     )
 
 def main():
