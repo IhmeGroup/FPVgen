@@ -313,22 +313,22 @@ class FlameletTableGenerator:
             solve: Whether to solve to steady state after update
         """
         if self.flame is None:
-            # If no previous solution exists, just initialize with default grid
-            self._initialize_flame()
-            return
+            flame_thickness = self._estimate_flame_thickness(self.initial_chi_st)
+        else:
+            flame_thickness = self._measure_flame_thickness()
 
-        # Compute the current flame thickness
-        flame_thickness = self._measure_flame_thickness()
-        
         # Compute the new width
         old_width = self.width
         target_width = self.width_ratio * flame_thickness
+        if self.flame is None:
+            self.width = target_width
+            self._initialize_flame()
+            return
         if np.abs(target_width - old_width) / old_width <= self.width_change_min:
             return
         self.width = np.clip(target_width,
                                (1+self.width_change_max) * old_width,
                              1/(1+self.width_change_max) * old_width)
-
         if self.width == old_width:
             return
         
@@ -547,7 +547,7 @@ class FlameletTableGenerator:
             a_max = strain_rate
             data = []
             start_iteration = 0
-
+        
         error_count = 0
         for i in range(start_iteration, n_max):
             # Update flame width if we are attempting a new point
@@ -574,7 +574,6 @@ class FlameletTableGenerator:
                 break
             
             try:
-                breakpoint()
                 self.flame.solve(loglevel=self.solver_loglevel, auto=True)
                 
                 # Adjust temperature increment based on convergence
