@@ -10,7 +10,7 @@ file = "gri30.yaml"  # Path to mechanism file
 
 [conditions]
 pressure = 101325.0      # Operating pressure in Pa
-initial_chi_st = 1.0e-4  # Initial target scalar dissipation rate
+initial_chi_st = 1.0e-3  # Initial target scalar dissipation rate
 
 [fuel_inlet]
 composition = { CH4 = 1.0 }  # Pure methane

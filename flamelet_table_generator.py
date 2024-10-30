@@ -222,17 +222,17 @@ class FlameletTableGenerator:
         Returns:
             float: Measured flame thickness [m]
         """
-        # Get the maximum temperature in the flame
-        T_max = np.max(self.flame.T)
-        T_threshold = 0.5 * T_max
-        
-        # Find the indices where the temperature crosses the threshold
-        indices = np.where(self.flame.T >= T_threshold)[0]
-        if len(indices) < 2:
-            return 0.0
-        
-        # Measure the flame thickness as the distance between the first and last index
-        flame_thickness = self.flame.grid[indices[-1]] - self.flame.grid[indices[0]]
+        if self.flame.extinct():
+            # Placeholder to prevent mesh update
+            return self.width / self.width_ratio
+            # Alternative - use estimate
+            strain_rate = self.flame.strain_rate('max')
+            return self._estimate_flame_thickness(strain_rate=strain_rate)
+        else:
+            T_max = np.max(self.flame.T)
+            T_threshold = 0.5 * T_max
+            indices = np.where(self.flame.T >= T_threshold)[0]
+            flame_thickness = self.flame.grid[indices[-1]] - self.flame.grid[indices[0]]
         return flame_thickness
 
     def _mdots_from_chi_st(self, chi_st: float) -> Tuple[float, float]:
@@ -313,7 +313,7 @@ class FlameletTableGenerator:
             solve: Whether to solve to steady state after update
         """
         if self.flame is None:
-            flame_thickness = self._estimate_flame_thickness(self.initial_chi_st)
+            flame_thickness = self._estimate_flame_thickness(chi_st=self.initial_chi_st)
         else:
             flame_thickness = self._measure_flame_thickness()
 
@@ -542,7 +542,6 @@ class FlameletTableGenerator:
             self.logger.info('Computing the initial solution')
             self.flame.solve(loglevel=self.solver_loglevel, auto=True)
             T_max = np.max(self.flame.T)
-            
             strain_rate = self.flame.strain_rate('max')
             a_max = strain_rate
             data = []
@@ -574,7 +573,7 @@ class FlameletTableGenerator:
                 break
             
             try:
-                self.flame.solve(loglevel=self.solver_loglevel, auto=True)
+                self.flame.solve(loglevel=self.solver_loglevel)
                 
                 # Adjust temperature increment based on convergence
                 if abs(max(self.flame.T) - T_max) < 0.8 * target_delta_T_max:
@@ -608,22 +607,17 @@ class FlameletTableGenerator:
                 )
                 continue
             
-            # Compute mixture fraction and scalar dissipation
+            # Compute postprocessing data
             Z = self._compute_mixture_fraction()
             chi, chi_st = self._compute_scalar_dissipation(Z)
-
-            # Get temperature at stoichiometric mixture fraction
             interp_T = interpolate.interp1d(Z, self.flame.T)
             T_st = float(interp_T(self.Z_st))
-            
-            # Collect solution data
             T_max = max(self.flame.T)
             T_mid = 0.5 * (min(self.flame.T) + max(self.flame.T))
             s = np.where(self.flame.T > T_mid)[0][[0, -1]]
             width = self.flame.grid[s[1]] - self.flame.grid[s[0]]
             strain_rate = self.flame.strain_rate('max')
             a_max = max(strain_rate, a_max)
-            
             step_data = {
                 'T_max': T_max,
                 'T_st': T_st,
@@ -734,49 +728,52 @@ class FlameletTableGenerator:
             self.flame.oxidizer_inlet.mdot = mdot_oxidizer
             
             try:
-                self.flame.solve(loglevel=self.solver_loglevel, auto=True)
-                
-                # Compute solution properties
-                Z = self._compute_mixture_fraction()
-                chi, chi_st_actual = self._compute_scalar_dissipation(Z)
-                
-                # Get temperature at stoichiometric mixture fraction
-                interp_T = interpolate.interp1d(Z, self.flame.T)
-                T_st = float(interp_T(self.Z_st))
-                
-                # Collect solution data
-                step_data = {
-                    'T_max': max(self.flame.T),
-                    'T_st': T_st,
-                    'strain_rate': self.flame.strain_rate('max'),
-                    'chi_st': chi_st_actual,
-                    'total_heat_release_rate': np.trapz(self.flame.heat_release_rate, self.flame.grid),
-                    'n_points': len(self.flame.grid),
-                    'flame_width': self.width,
-                    'branch': 'extinction'
-                }
-                
-                data.append(step_data)
-                self.solutions.append({
-                    'state': self.flame.to_array(),
-                    'Z': Z,
-                    'chi': chi,
-                    'metadata': step_data
-                })
-                
-                if output_path:
-                    self.save_solution(output_path, len(self.solutions) - 1)
-                
-                # Logging after successful solution
-                self.logger.info(
-                    f"Iteration {i} completed: T_max = {T_max:.2f}, T_st = {T_st:.2f}, "
-                    f"chi_st = {chi_st:.4e}, strain_rate = {strain_rate:.2f}"
-                )
-                    
-            except ct.CanteraError as err:
-                self.logger.warning(f"Failed to compute solution at chi_st = {chi_st:.2e}: {err}")
+                self.flame.solve(loglevel=self.solver_loglevel)
+            except:
+                self.logger.warning(f"Failed to compute solution at chi_st = {chi_st:.2e}")
                 continue
+            
+            # Compute postprocessing data
+            Z = self._compute_mixture_fraction()
+            chi, chi_st = self._compute_scalar_dissipation(Z)
+            interp_T = interpolate.interp1d(Z, self.flame.T)
+            T_st = float(interp_T(self.Z_st))
+            T_max = max(self.flame.T)
+            T_mid = 0.5 * (min(self.flame.T) + max(self.flame.T))
+            s = np.where(self.flame.T > T_mid)[0][[0, -1]]
+            width = self.flame.grid[s[1]] - self.flame.grid[s[0]]
+            strain_rate = self.flame.strain_rate('max')
+            a_max = max(strain_rate, a_max)
+            step_data = {
+                'T_max': T_max,
+                'T_st': T_st,
+                'strain_rate': strain_rate,
+                'chi_st': chi_st,
+                'total_heat_release_rate': np.trapz(self.flame.heat_release_rate, self.flame.grid),
+                'n_points': len(self.flame.grid),
+                'flame_width': width,
+                'time_steps': sum(self.flame.time_step_stats),
+                'eval_count': sum(self.flame.eval_count_stats),
+                'cpu_time': sum(self.flame.jacobian_time_stats + self.flame.eval_time_stats),
+            }
+            data.append(step_data)
+            self.solutions.append({
+                'state': self.flame.to_array(),
+                'Z': Z,
+                'chi': chi,
+                'metadata': step_data
+            })
+
+            if output_path:
+                self.save_solution(output_path, len(self.solutions) - 1)
+            
+            # Logging after successful solution
+            self.logger.info(
+                f"Iteration {i} completed: T_max = {T_max:.2f}, T_st = {T_st:.2f}, "
+                f"chi_st = {chi_st:.4e}, strain_rate = {strain_rate:.2f}"
+            )
         
+        self.logger.info(f'Completed {len(data)} points on the extinction branch')
         return data
 
     def save_solution(self, output_path: Path, solution_index: int):
