@@ -420,9 +420,7 @@ class FlameletTableGenerator:
         # Solve to steady state
         if solve:
             self.logger.info("Computing the solution in the new domain")
-            breakpoint()
             self.flame.solve(loglevel=self.solver_loglevel+1, auto=True)
-            breakpoint()
     
     def compute_s_curve(
         self,
@@ -556,9 +554,10 @@ class FlameletTableGenerator:
 
         # Rest of the method remains the same, but change the iteration range
         for i in range(start_iteration, n_max):
-            # Update flame width before each solution attempt
-            self._update_flame_width(solve=True)
-            self._enable_two_point_control()
+            # Update flame width if we are attempting a new point
+            if error_count == 0:
+                self._update_flame_width(solve=True)
+                self._enable_two_point_control()
 
             spacing = unstable_spacing if strain_rate <= 0.98 * a_max else initial_spacing
             control_temperature = (np.min(self.flame.T) + 
