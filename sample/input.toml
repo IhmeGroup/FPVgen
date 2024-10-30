@@ -23,7 +23,9 @@ temperature = 300.0                     # Temperature in K
 [solver]
 output_dir = "flamelet_results"  # Output directory
 create_plots = true              # Whether to create visualization plots
-width_ratio = 10.0                # Ratio of domain width to flame thickness
+width_ratio = 10.0               # Ratio of domain width to flame thickness
+width_change_max = 0.1           # Maximum domain width change
+width_change_min = 0.05          # Minimum domain width change
 
 # Solver options passed to compute_s_curve
 [solver.options]

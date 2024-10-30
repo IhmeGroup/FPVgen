@@ -119,7 +119,10 @@ def create_generator(config: dict) -> FlameletTableGenerator:
         oxidizer_inlet=oxidizer_inlet,
         pressure=config['conditions'].get('pressure'),
         width_ratio=config['solver'].get('width_ratio'),
-        initial_chi_st=config['conditions'].get('initial_chi_st')
+        width_change_max=config['solver'].get('width_change_max'),
+        width_change_min=config['solver'].get('width_change_min'),
+        initial_chi_st=config['conditions'].get('initial_chi_st'),
+        solver_loglevel=config['solver'].get('options').get('loglevel')
     )
 
 def main():
@@ -189,11 +192,8 @@ def main():
         logger.info("Computing flamelet solutions")
         solver_options = config['solver'].get('options', {})
         n_extinction_points = config['solver'].get('n_extinction_points', 10)
-        solver_options.pop('n_extinction_points', None)  # Remove if present
-        
-        # Set default loglevel if not specified
-        if 'loglevel' not in solver_options:
-            solver_options['loglevel'] = 0  # Default to basic solver output
+        solver_options.pop('n_extinction_points', None)
+        solver_options.pop('loglevel', None)
         
         # Add restart parameter to solver options
         if restart_from is not None:

@@ -44,11 +44,14 @@ class FlameletTableGenerator:
         oxidizer_inlet (InletCondition): Oxidizer stream inlet conditions
         pressure (float): Operating pressure in Pa
         width_ratio (float): Ratio of the domain width to the flame thickness
+        width_change_max (float): Maximum domain width change
+        width_change_min (float): Minimum domain width change
         initial_chi_st (float): Initial scalar dissipation rate at stoichiometric mixture fraction
         gas (ct.Solution): Cantera Solution object for the mechanism
         flame (ct.CounterflowDiffusionFlame): Cantera flame object
         solutions (List[Dict]): List of computed solutions and their metadata
         Z_st (float): Stoichiometric mixture fraction
+        solver_loglevel (int): Cantera solver log level (0-3)
     """
 
     def __init__(
@@ -58,7 +61,10 @@ class FlameletTableGenerator:
         oxidizer_inlet: InletCondition,
         pressure: float,
         width_ratio: Optional[float] = 10.0,
+        width_change_max: Optional[float] = 0.2,
+        width_change_min: Optional[float] = 0.05,
         initial_chi_st: Optional[float] = 1.0e-2,
+        solver_loglevel: Optional[int] = 0
     ):
         """Initialize the flamelet generator with mechanism and conditions.
         
@@ -68,7 +74,10 @@ class FlameletTableGenerator:
             oxidizer_inlet: Oxidizer stream inlet conditions
             pressure: Operating pressure in Pa
             width_ratio: Ratio of the domain width to the flame thickness
+            width_change_max: Maximum domain width change
+            width_change_min: Minimum domain width change
             initial_chi_st: Initial scalar dissipation rate at stoichiometric mixture fraction
+            solver_loglevel: Cantera solver log level (0-3)
         """
         self.logger = logging.getLogger(__name__)
         self.logger.setLevel(logging.INFO)
@@ -79,7 +88,10 @@ class FlameletTableGenerator:
         self.oxidizer_inlet = oxidizer_inlet
         self.pressure = pressure
         self.width_ratio = width_ratio
+        self.width_change_max = width_change_max
+        self.width_change_min = width_change_min
         self.initial_chi_st = initial_chi_st
+        self.solver_loglevel = solver_loglevel
         
         # Initialization
         self.gas = ct.Solution(self.mechanism_file)
@@ -294,8 +306,11 @@ class FlameletTableGenerator:
         self.flame.flame.set_bounds(spread_rate=(-1e-5, 1e20))
         self.flame.max_time_step_count = 100
     
-    def _update_flame_width(self):
+    def _update_flame_width(self, solve: Optional[bool] = True):
         """Update the flame width and reinitialize the flame object.
+
+        Args:
+            solve: Whether to solve to steady state after update
         """
         if self.flame is None:
             # If no previous solution exists, just initialize with default grid
@@ -307,10 +322,12 @@ class FlameletTableGenerator:
         
         # Compute the new width
         old_width = self.width
-        change_tol = 0.5
-        self.width = np.clip(self.width_ratio * flame_thickness, 
-                               (1+change_tol) * old_width,
-                             1/(1+change_tol) * old_width)
+        target_width = self.width_ratio * flame_thickness
+        if np.abs(target_width - old_width) / old_width <= self.width_change_min:
+            return
+        self.width = np.clip(target_width,
+                               (1+self.width_change_max) * old_width,
+                             1/(1+self.width_change_max) * old_width)
 
         if self.width == old_width:
             return
@@ -399,6 +416,13 @@ class FlameletTableGenerator:
         # Update inlet mass flow rates
         self.flame.fuel_inlet.mdot     = old_mdots[0] * scale_factor
         self.flame.oxidizer_inlet.mdot = old_mdots[1] * scale_factor
+
+        # Solve to steady state
+        if solve:
+            self.logger.info("Computing the solution in the new domain")
+            breakpoint()
+            self.flame.solve(loglevel=self.solver_loglevel+1, auto=True)
+            breakpoint()
     
     def compute_s_curve(
         self,
@@ -435,9 +459,7 @@ class FlameletTableGenerator:
             chi_st_min=chi_st_min,
             chi_st_max=chi_st_max,
             n_points=n_extinction_points,
-            output_path=output_path,
-            loglevel=kwargs.get('loglevel')
-        )
+            output_path=output_path)
         
         return ignited_data + extinct_data
 
@@ -453,7 +475,6 @@ class FlameletTableGenerator:
         target_delta_T_max: float = 20.0,
         max_error_count: int = 3,
         strain_rate_tol: float = 0.10,
-        loglevel: int = 0,
     ) -> List[Dict]:
         """Compute upper (stable) and middle (unstable) branches of the S-curve.
         
@@ -472,7 +493,6 @@ class FlameletTableGenerator:
             target_delta_T_max: Target maximum temperature change per step [K]
             max_error_count: Maximum number of successive solver errors before stopping
             strain_rate_tol: Tolerance for minimum strain rate relative to maximum
-            loglevel: Cantera solver log level (0-3)
         
         Returns:
             List[Dict]: List of solution metadata dictionaries containing properties
@@ -522,7 +542,7 @@ class FlameletTableGenerator:
             
         else:
             self.logger.info('Computing the initial solution')
-            self.flame.solve(loglevel=loglevel, auto=True)
+            self.flame.solve(loglevel=self.solver_loglevel, auto=True)
             
             strain_rate = self.flame.strain_rate('max')
             a_max = strain_rate
@@ -537,8 +557,7 @@ class FlameletTableGenerator:
         # Rest of the method remains the same, but change the iteration range
         for i in range(start_iteration, n_max):
             # Update flame width before each solution attempt
-            self._update_flame_width()
-            self.flame.solve(loglevel=loglevel, auto=True)
+            self._update_flame_width(solve=True)
             self._enable_two_point_control()
 
             spacing = unstable_spacing if strain_rate <= 0.98 * a_max else initial_spacing
@@ -564,7 +583,7 @@ class FlameletTableGenerator:
                 break
             
             try:
-                self.flame.solve(loglevel=loglevel, auto=True)
+                self.flame.solve(loglevel=self.solver_loglevel, auto=True)
                 
                 # Adjust temperature increment based on convergence
                 if abs(max(self.flame.T) - T_max) < 0.8 * target_delta_T_max:
@@ -654,7 +673,6 @@ class FlameletTableGenerator:
         chi_st_max: float,
         n_points: int = 10,
         output_path: Optional[Path] = None,
-        loglevel: int = 0
     ) -> List[Dict]:
         """Compute the extinction (lower) branch of the S-curve.
         
@@ -668,7 +686,6 @@ class FlameletTableGenerator:
             chi_st_max: Maximum scalar dissipation rate at stoichiometric mixture fraction [1/s]
             n_points: Number of points to compute along the extinction branch
             output_path: Optional directory path to save solution files
-            loglevel: Cantera solver log level (0-3)
         
         Returns:
             List[Dict]: List of solution metadata dictionaries containing properties
@@ -718,7 +735,7 @@ class FlameletTableGenerator:
         
         for chi_st in chi_st_values:
             # Update flame width before each solution attempt
-            self._update_flame_width()
+            self._update_flame_width(solve=True)
             self._enable_two_point_control()
             
             mdot_fuel, mdot_oxidizer = self._mdots_from_chi_st(chi_st)
@@ -726,7 +743,7 @@ class FlameletTableGenerator:
             self.flame.oxidizer_inlet.mdot = mdot_oxidizer
             
             try:
-                self.flame.solve(loglevel=loglevel, auto=True)
+                self.flame.solve(loglevel=self.solver_loglevel, auto=True)
                 
                 # Compute solution properties
                 Z = self._compute_mixture_fraction()
