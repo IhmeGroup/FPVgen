@@ -31,7 +31,6 @@ class InletCondition:
     """Represents inlet conditions for fuel or oxidizer stream"""
     composition: Dict[str, float]  # Species mole fractions
     temperature: float             # Temperature in Kelvin
-    mass_flux: float               # Mass flux in kg/m²/s
 
 class FlameletTableGenerator:
     """Generator for flamelet calculations including unstable branch traversal.
@@ -88,7 +87,7 @@ class FlameletTableGenerator:
         self.width = 1.0 # Needed for initial flame construction but will be overridden
         self.flame = None
         self.solutions = []
-        self._update_flame_width(enable_two_point_control=False)
+        self._update_flame_width()
     
     def _compute_stoichiometric_mixture_fraction(self) -> float:
         """Compute the stoichiometric mixture fraction using Bilger's definition.
@@ -204,6 +203,25 @@ class FlameletTableGenerator:
             return self._estimate_flame_thickness(strain_rate=strain_rate)
         else:
             raise ValueError("Either strain_rate or chi_st must be provided.")
+    
+    def _measure_flame_thickness(self) -> float:
+        """Measure the flame thickness in the current state.
+
+        Returns:
+            float: Measured flame thickness [m]
+        """
+        # Get the maximum temperature in the flame
+        T_max = np.max(self.flame.T)
+        T_threshold = 0.5 * T_max
+        
+        # Find the indices where the temperature crosses the threshold
+        indices = np.where(self.flame.T >= T_threshold)[0]
+        if len(indices) < 2:
+            return 0.0
+        
+        # Measure the flame thickness as the distance between the first and last index
+        flame_thickness = self.flame.grid[indices[-1]] - self.flame.grid[indices[0]]
+        return flame_thickness
 
     def _mdots_from_chi_st(self, chi_st: float) -> Tuple[float, float]:
         """Compute mass fluxes for fuel and oxidizer based on target chi_st.
@@ -241,116 +259,146 @@ class FlameletTableGenerator:
 
         return mdot_fuel, mdot_oxidizer
 
-    def _initialize_flame(self, enable_two_point_control: bool = False):
+    def _initialize_flame(self, grid: Optional[np.ndarray] = None):
         """Set up the initial counterflow diffusion flame configuration.
 
         Args:
-            enable_two_point_control: Whether to enable two-point control
+            grid: The grid for the flame object
         
         Initializes the Cantera flame object with appropriate grid, inlet conditions,
         and refinement criteria. Estimates appropriate strain rate based on target
         scalar dissipation rate.
         """
-        self.flame = ct.CounterflowDiffusionFlame(self.gas, width=self.width)
+        if grid is not None:
+            self.flame = ct.CounterflowDiffusionFlame(self.gas, grid=grid)
+        else:
+            self.flame = ct.CounterflowDiffusionFlame(self.gas, width=self.width)
         
         # Set operating conditions
         self.flame.P = self.pressure
         
-        # Use the new method to compute mass fluxes
-        mdot_fuel, mdot_ox = self._mdots_from_chi_st(self.initial_chi_st)
-        
         # Set inlet conditions
+        mdot_fuel, mdot_ox = self._mdots_from_chi_st(self.initial_chi_st)
         self.flame.fuel_inlet.mdot = mdot_fuel
         self.flame.fuel_inlet.X = self.fuel_inlet.composition
         self.flame.fuel_inlet.T = self.fuel_inlet.temperature
-        
         self.flame.oxidizer_inlet.mdot = mdot_ox
         self.flame.oxidizer_inlet.X = self.oxidizer_inlet.composition
         self.flame.oxidizer_inlet.T = self.oxidizer_inlet.temperature
 
-        # Enable and configure two-point control
-        if enable_two_point_control:
-            self.flame.two_point_control_enabled = True
-            self.flame.flame.set_bounds(spread_rate=(-1e-5, 1e20))
-            self.flame.max_time_step_count = 100
-
         # Set refinement parameters
         self.flame.set_refine_criteria(ratio=4.0, slope=0.1, curve=0.2, prune=0.05)
     
-    def _update_flame_width(self, enable_two_point_control: bool = False):
+    def _enable_two_point_control(self):
+        self.flame.two_point_control_enabled = True
+        self.flame.flame.set_bounds(spread_rate=(-1e-5, 1e20))
+        self.flame.max_time_step_count = 100
+    
+    def _update_flame_width(self):
         """Update the flame width and reinitialize the flame object.
-        Args:
-            enable_two_point_control: Whether to enable two-point control
         """
+        if self.flame is None:
+            # If no previous solution exists, just initialize with default grid
+            self._initialize_flame()
+            return
+
         # Compute the current flame thickness
-        strain = self._estimate_strain_from_chi_st(self.initial_chi_st)
-        flame_thickness = self._estimate_flame_thickness(strain_rate=strain)
+        flame_thickness = self._measure_flame_thickness()
         
         # Compute the new width
         old_width = self.width
-        self.width = self.width_ratio * flame_thickness
+        change_tol = 0.5
+        self.width = np.clip(self.width_ratio * flame_thickness, 
+                               (1+change_tol) * old_width,
+                             1/(1+change_tol) * old_width)
+
+        if self.width == old_width:
+            return
+        
         width_increasing = (self.width >= old_width)
         self.logger.info(f"Updating domain width from {old_width:.3e} m to {self.width:.3e} m")
         
-        # If flame has been solved, save the state
-        if self.flame is not None:
-            old_solution = self.flame.to_array()
-            old_mdots = (self.flame.fuel_inlet.mdot, self.flame.oxidizer_inlet.mdot)
-        else:
-            old_solution = None
+        # Save current state
+        old_solution = self.flame.to_array()
+        old_mdots = (self.flame.fuel_inlet.mdot,
+                     self.flame.oxidizer_inlet.mdot)
+        old_grid = self.flame.grid
         
-        # Reinitialize the flame object with the new width
-        self._initialize_flame(enable_two_point_control)
+        # Find approximate flame location (using peak temperature)
+        old_grid_norm = old_grid / old_width
+        flame_idx = np.argmax(self.flame.T)
+        flame_loc_old = old_grid[flame_idx]
+        flame_loc_normalized = old_grid_norm[flame_idx]
+        flame_loc_new = flame_loc_normalized * self.width
         
-        # Interpolate old solution onto the new domain, adjusting velocity accordingly
-        if old_solution is not None:
-            # Create interpolation functions for each variable
-            new_grid = self.flame.grid
-            new_grid_norm = new_grid / (new_grid[-1] - new_grid[0])
-            scale_factor = self.width / old_width
-            
-            # Calculate new inlet mdots to maintain strain rate
-            new_mdots = tuple(mdot * scale_factor for mdot in old_mdots)
-            
-            # For each variable in the solution, interpolate to new grid
-            var_names = ['velocity', 'spread_rate', 'lambda', 'Uo', 'T', 'density']
-            var_names += ['Y_' + name for name in self.gas.species_names]
-            for i, var_name in enumerate(var_names):
-                # Create interpolation function
-                old_values = getattr(old_solution, var_name)
-                interp = interpolate.interp1d(
-                    old_solution.grid, old_values,
-                    kind='cubic', bounds_error=False,
-                    fill_value=(old_values[0], old_values[-1]))
-                
-                # Get interpolated values
-                new_values = interp(new_grid)
+        # Construct new grid maintaining resolution and flame position
+        if width_increasing:
+            # For width increase, extend the existing grid
+            # Create new grid, keeping flame_loc_normalized and absolute old spacing
+            new_grid = old_grid + (flame_loc_new - flame_loc_old)
 
-                # Handle special cases
-                if var_name in ['velocity', 'spread_rate', 'Uo']:
-                    # Scale velocity to maintain strain rate
-                    new_values *= scale_factor
-                elif var_name.startswith('Y_'):
-                    # Ensure mass fractions remain between 0 and 1
-                    new_values = np.clip(new_values, 0, 1)
-                
-                # Update the flame solution
-                self.flame.set_profile(var_name, new_grid_norm, new_values)
+            # Fill in the gaps at the sides
+            dx_l = old_grid[ 1] - old_grid[ 0]
+            dx_r = old_grid[-1] - old_grid[-2]
+            grid_l = np.arange(0, new_grid[0], dx_l)
+            grid_r = np.arange(new_grid[-1], self.width, dx_r)
+            if len(grid_r) > 0 and grid_r[-1] < self.width:
+                grid_r = np.append(grid_r[1:], self.width)
+            new_grid = np.concatenate((grid_l, new_grid, grid_r))
+        else:
+            # For width decrease, trim existing grid
+            # Create new grid, keeping flame_loc_normalized and absolute old spacing
+            new_grid = old_grid + (flame_loc_new - flame_loc_old)
+
+            # Find points that fall within new domain
+            interior_mask = (new_grid > 0) & (new_grid < self.width)
+            new_grid = new_grid[interior_mask]
             
-            # Normalize mass fractions at each point
-            Y_sum = np.zeros_like(new_grid)
-            for spec in self.gas.species_names:
-                Y_sum += self.flame.Y[spec]
-            for spec in self.gas.species_names:
-                Y = self.flame.Y[spec]
-                Y_normalized = np.where(Y_sum > 0, Y / Y_sum, 0)
-                self.flame.set_profile(f'Y_{spec}', new_grid, Y_normalized)
-            
-            # Update inlet mass flow rates to maintain strain rate
-            self.flame.inlet_fuel.mdot = new_mdots[0]
-            self.flame.inlet_oxidizer.mdot = new_mdots[1]
+            # Add boundary points
+            new_grid = np.concatenate(([0.0], new_grid, [self.width]))
         
-        self.logger.info("Updated domain width to {0:.3e} m".format(self.width))
+        new_grid_norm = new_grid / self.width
+        self._initialize_flame(grid=new_grid)
+        
+        # Interpolate solution onto new grid
+        scale_factor = self.width / old_width
+        
+        var_names = ['velocity', 'spread_rate', 'lambda', 'T']
+        var_names += self.gas.species_names
+        if self.flame.two_point_control_enabled:
+            var_names += ['Uo']
+        
+        for var_name in var_names:
+            old_values = getattr(old_solution, var_name)
+            interp = interpolate.interp1d(
+                old_grid_norm, old_values,
+                kind='cubic', bounds_error=False,
+                fill_value=(old_values[0], old_values[-1]))
+            new_values = interp(new_grid_norm)
+
+            # Handle special cases
+            if var_name in ['velocity', 'spread_rate', 'Uo']:
+                new_values *= scale_factor
+            # elif var_name in self.gas.species_names:
+            #     new_values = np.clip(new_values, 0, 1)
+            
+            # Update the flame solution
+            self.flame.set_profile(var_name, new_grid_norm, new_values)
+        
+        # # Normalize mass fractions
+        # Y_sum = np.zeros_like(new_grid)
+        # for k in range(self.gas.n_species):
+        #     Y_sum += self.flame.Y[k, :]
+        # for k in range(self.gas.n_species):
+        #     Y = self.flame.Y[k, :]
+        #     Y_normalized = np.where(Y_sum > 0, Y / Y_sum, 0)
+        #     self.flame.set_profile(self.gas.species_names[k],
+        #                            new_grid_norm,
+        #                            Y_normalized)
+
+        # Update inlet mass flow rates
+        self.flame.fuel_inlet.mdot     = old_mdots[0] * scale_factor
+        self.flame.oxidizer_inlet.mdot = old_mdots[1] * scale_factor
     
     def compute_s_curve(
         self,
@@ -454,7 +502,6 @@ class FlameletTableGenerator:
         
         # Handle restart case
         if restart_from is not None:
-            breakpoint()
             if restart_from >= len(self.solutions):
                 raise ValueError(f"Restart index {restart_from} exceeds number of available solutions")
             
@@ -474,7 +521,6 @@ class FlameletTableGenerator:
             start_iteration = restart_from + 1
             
         else:
-            # Original initialization code
             self.logger.info('Computing the initial solution')
             self.flame.solve(loglevel=loglevel, auto=True)
             
@@ -491,8 +537,10 @@ class FlameletTableGenerator:
         # Rest of the method remains the same, but change the iteration range
         for i in range(start_iteration, n_max):
             # Update flame width before each solution attempt
-            self._update_flame_width(enable_two_point_control=True)
-            
+            self._update_flame_width()
+            self.flame.solve(loglevel=loglevel, auto=True)
+            self._enable_two_point_control()
+
             spacing = unstable_spacing if strain_rate <= 0.98 * a_max else initial_spacing
             control_temperature = (np.min(self.flame.T) + 
                                    spacing * (np.max(self.flame.T) - np.min(self.flame.T)))
@@ -516,7 +564,7 @@ class FlameletTableGenerator:
                 break
             
             try:
-                self.flame.solve(loglevel=loglevel)
+                self.flame.solve(loglevel=loglevel, auto=True)
                 
                 # Adjust temperature increment based on convergence
                 if abs(max(self.flame.T) - T_max) < 0.8 * target_delta_T_max:
@@ -548,6 +596,7 @@ class FlameletTableGenerator:
                     f"Solver did not converge on iteration {i}. "
                     f"Trying again with dT = {temperature_increment:.2f}"
                 )
+                continue
             
             # Compute mixture fraction and scalar dissipation
             Z = self._compute_mixture_fraction()
@@ -669,7 +718,8 @@ class FlameletTableGenerator:
         
         for chi_st in chi_st_values:
             # Update flame width before each solution attempt
-            self._update_flame_width(enable_two_point_control=True)
+            self._update_flame_width()
+            self._enable_two_point_control()
             
             mdot_fuel, mdot_oxidizer = self._mdots_from_chi_st(chi_st)
             self.flame.fuel_inlet.mdot = mdot_fuel
@@ -747,12 +797,10 @@ class FlameletTableGenerator:
                     'fuel_inlet': {
                         'composition': self.fuel_inlet.composition,
                         'temperature': self.fuel_inlet.temperature,
-                        'mass_flux': self.fuel_inlet.mass_flux
                     },
                     'oxidizer_inlet': {
                         'composition': self.oxidizer_inlet.composition,
                         'temperature': self.oxidizer_inlet.temperature,
-                        'mass_flux': self.oxidizer_inlet.mass_flux
                     }
                 }
                 f.attrs['parameters'] = json.dumps(params)
@@ -961,3 +1009,58 @@ class FlameletTableGenerator:
         
         return fig, ax
 
+    def plot_current_state(self, output_file: Optional[str] = None):
+        """Plot the current state of the flame in physical space.
+        
+        Args:
+            output_file: Optional file path to save the figure
+
+        Returns:
+            Tuple[Figure, Axes]: Matplotlib figure and axes objects
+        """
+        import matplotlib.pyplot as plt
+        from matplotlib.colors import LogNorm
+        
+        if self.flame is None:
+            raise ValueError("Flame has not been initialized. Please initialize the flame first.")
+        
+        fig, ax = plt.subplots()
+        ax.plot(self.flame.grid, self.flame.T, color='red')
+        ax.set_xlabel(r"$x$ [m]")
+        ax.set_ylabel(r"$T$ [K]")
+        ax.grid(True, alpha=0.2)
+        
+        if output_file:
+            fig.savefig(output_file, bbox_inches='tight', dpi=300)
+        
+        return fig, ax
+
+    def plot_current_state_composition_space(self, output_file: Optional[str] = None):
+        """Plot the current state of the flame in composition space.
+        
+        Args:
+            output_file: Optional file path to save the figure
+
+        Returns:
+            Tuple[Figure, Axes]: Matplotlib figure and axes objects
+        """
+        import matplotlib.pyplot as plt
+        from matplotlib.colors import LogNorm
+        
+        if self.flame is None:
+            raise ValueError("Flame has not been initialized. Please initialize the flame first.")
+        
+        Z = self._compute_mixture_fraction()
+        T = self.flame.T
+        
+        fig, ax = plt.subplots()
+        ax.plot(Z, T, color='red')
+        ax.axvline(self.Z_st, color='k', linestyle='--')
+        ax.set_xlabel(r"$Z$ [-]")
+        ax.set_ylabel(r"$T$ [K]")
+        ax.grid(True, alpha=0.2)
+        
+        if output_file:
+            fig.savefig(output_file, bbox_inches='tight', dpi=300)
+        
+        return fig, ax

@@ -102,17 +102,14 @@ def create_generator(config: dict) -> FlameletTableGenerator:
         Mass flux values are set to placeholder values as they are automatically
         adjusted by the solver based on the target scalar dissipation rate.
     """
-    # Create inlet conditions (without mass_flux)
     fuel_inlet = InletCondition(
         composition=config['fuel_inlet']['composition'],
         temperature=config['fuel_inlet']['temperature'],
-        mass_flux=1.0  # Placeholder, will be overridden
     )
     
     oxidizer_inlet = InletCondition(
         composition=config['oxidizer_inlet']['composition'],
         temperature=config['oxidizer_inlet']['temperature'],
-        mass_flux=1.0  # Placeholder, will be overridden
     )
     
     # Create generator
