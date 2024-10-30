@@ -420,7 +420,7 @@ class FlameletTableGenerator:
         # Solve to steady state
         if solve:
             self.logger.info("Computing the solution in the new domain")
-            self.flame.solve(loglevel=self.solver_loglevel+1, auto=True)
+            self.flame.solve(loglevel=self.solver_loglevel, auto=True)
     
     def compute_s_curve(
         self,
@@ -541,47 +541,40 @@ class FlameletTableGenerator:
         else:
             self.logger.info('Computing the initial solution')
             self.flame.solve(loglevel=self.solver_loglevel, auto=True)
+            T_max = np.max(self.flame.T)
             
             strain_rate = self.flame.strain_rate('max')
             a_max = strain_rate
             data = []
             start_iteration = 0
 
-        
-        # Initialize error tracking
         error_count = 0
-        T_max = max(self.flame.T)
-
-        # Rest of the method remains the same, but change the iteration range
         for i in range(start_iteration, n_max):
             # Update flame width if we are attempting a new point
             if error_count == 0:
                 self._update_flame_width(solve=True)
                 self._enable_two_point_control()
+                T_max = np.max(self.flame.T)
+            
+            backup_state = self.flame.to_array()
 
+            # Update control temperatures
             spacing = unstable_spacing if strain_rate <= 0.98 * a_max else initial_spacing
             control_temperature = (np.min(self.flame.T) + 
                                    spacing * (np.max(self.flame.T) - np.min(self.flame.T)))
-            
-            # Store current state
-            backup_state = self.flame.to_array()
-            
             self.logger.debug(f'Iteration {i}: Control temperature = {control_temperature:.2f} K')
             self.flame.set_left_control_point(control_temperature)
             self.flame.set_right_control_point(control_temperature)
-            
-            # Update control points
             self.flame.left_control_point_temperature -= temperature_increment
             self.flame.right_control_point_temperature -= temperature_increment
             self.flame.clear_stats()
-            
-            # Check if we've reached inlet temperatures
             if (self.flame.left_control_point_temperature < self.flame.fuel_inlet.T + 100 or
                 self.flame.right_control_point_temperature < self.flame.oxidizer_inlet.T + 100):
                 self.logger.info("SUCCESS! Control point temperature near inlet temperature.")
                 break
             
             try:
+                breakpoint()
                 self.flame.solve(loglevel=self.solver_loglevel, auto=True)
                 
                 # Adjust temperature increment based on convergence
