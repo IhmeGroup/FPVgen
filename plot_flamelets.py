@@ -33,7 +33,7 @@ def main():
         output_dir = args.output or args.solutions_file.parent
         output_dir.mkdir(parents=True, exist_ok=True)
         logger.info(f"Output directory: {output_dir}")
-        
+
         # Generate S-curve plot
         logger.info("Generating S-curve plot")
         generator.plot_s_curve(
@@ -44,6 +44,12 @@ def main():
         logger.info("Generating temperature profiles plot")
         generator.plot_temperature_profiles(
             output_file=output_dir / 'temperature_profiles.png'
+        )
+
+        # Generate strain vs chi_st plot
+        logger.info("Generating strain vs chi_st plot")
+        generator.plot_strain_chi_st(
+            output_file=output_dir / 'strain_chi_st.png'
         )
         
         logger.info("Plot generation completed successfully")

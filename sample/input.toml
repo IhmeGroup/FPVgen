@@ -10,7 +10,7 @@ file = "gri30.yaml"  # Path to mechanism file
 
 [conditions]
 pressure = 101325.0      # Operating pressure in Pa
-initial_chi_st = 1.0e-3  # Initial target scalar dissipation rate
+initial_chi_st = 1.0e-5  # Initial target scalar dissipation rate
 
 [fuel_inlet]
 composition = { CH4 = 1.0 }  # Pure methane
@@ -24,8 +24,11 @@ temperature = 300.0                     # Temperature in K
 output_dir = "flamelet_results"  # Output directory
 create_plots = true              # Whether to create visualization plots
 width_ratio = 10.0               # Ratio of domain width to flame thickness
+width_change_enable = false      # Enable domain width changes
 width_change_max = 0.1           # Maximum domain width change
 width_change_min = 0.05          # Minimum domain width change
+# strain_chi_st_model_param_file = "strain_chi_st.json"
+                                 # File to save strain rate model parameters
 
 # Solver options passed to compute_s_curve
 [solver.options]

@@ -44,6 +44,7 @@ class FlameletTableGenerator:
         oxidizer_inlet (InletCondition): Oxidizer stream inlet conditions
         pressure (float): Operating pressure in Pa
         width_ratio (float): Ratio of the domain width to the flame thickness
+        width_change_enable (bool): Enable domain width changes
         width_change_max (float): Maximum domain width change
         width_change_min (float): Minimum domain width change
         initial_chi_st (float): Initial scalar dissipation rate at stoichiometric mixture fraction
@@ -61,10 +62,12 @@ class FlameletTableGenerator:
         oxidizer_inlet: InletCondition,
         pressure: float,
         width_ratio: Optional[float] = 10.0,
+        width_change_enable: Optional[bool] = False,
         width_change_max: Optional[float] = 0.2,
         width_change_min: Optional[float] = 0.05,
         initial_chi_st: Optional[float] = 1.0e-2,
-        solver_loglevel: Optional[int] = 0
+        solver_loglevel: Optional[int] = 0,
+        strain_chi_st_model_param_file: Optional[str] = None
     ):
         """Initialize the flamelet generator with mechanism and conditions.
         
@@ -74,10 +77,12 @@ class FlameletTableGenerator:
             oxidizer_inlet: Oxidizer stream inlet conditions
             pressure: Operating pressure in Pa
             width_ratio: Ratio of the domain width to the flame thickness
+            width_change_enable: Enable domain width changes
             width_change_max: Maximum domain width change
             width_change_min: Minimum domain width change
             initial_chi_st: Initial scalar dissipation rate at stoichiometric mixture fraction
             solver_loglevel: Cantera solver log level (0-3)
+            strain_chi_st_model_param_file: Path to JSON file with strain vs chi_st model parameters
         """
         self.logger = logging.getLogger(__name__)
         self.logger.setLevel(logging.INFO)
@@ -88,10 +93,17 @@ class FlameletTableGenerator:
         self.oxidizer_inlet = oxidizer_inlet
         self.pressure = pressure
         self.width_ratio = width_ratio
+        self.width_change_enable = width_change_enable
         self.width_change_max = width_change_max
         self.width_change_min = width_change_min
         self.initial_chi_st = initial_chi_st
         self.solver_loglevel = solver_loglevel
+
+        if strain_chi_st_model_param_file is not None:
+            with open(strain_chi_st_model_param_file, 'r') as f:
+                self.strain_chi_st_model_params = json.load(f)
+        else:
+            self.strain_chi_st_model_params = None
         
         # Initialization
         self.gas = ct.Solution(self.mechanism_file)
@@ -166,15 +178,21 @@ class FlameletTableGenerator:
         """Estimate the stoichiometric scalar dissipation rate from a target strain rate.
 
         Args:
-            strain_rate: Target strain rate
+            strain_rate: Target strain rate [1/s]
         
         Returns:
-            float: Estimated stoichiometric scalar dissipation rate
+            float: Estimated stoichiometric scalar dissipation rate [1/s]
 
         Note:
-            Uses Peters' relationship (Peters, PECS 1984)
+            Uses regression model if available, otherwise uses Peters' relationship (Peters, PECS 1984)
         """
-        chi_st = (strain_rate / np.pi) * np.exp(-2 * erfcinv(2 * self.Z_st)**2)
+        if self.strain_chi_st_model_params is not None:
+            m = self.strain_chi_st_model_params['slope']
+            b = self.strain_chi_st_model_params['intercept']
+            log_chi_st = m * np.log10(strain_rate) + b
+            chi_st = 10**log_chi_st
+        else:
+            chi_st = (strain_rate / np.pi) * np.exp(-2 * erfcinv(2 * self.Z_st)**2)
         return chi_st
 
     def _estimate_strain_from_chi_st(self, chi_st: float) -> float:
@@ -185,8 +203,17 @@ class FlameletTableGenerator:
         
         Returns:
             float: Estimated strain rate [1/s]
+        
+        Note:
+            Uses regression model if available, otherwise uses Peters' relationship (Peters, PECS 1984)
         """
-        strain_rate = chi_st * np.pi / np.exp(-2 * erfcinv(2 * self.Z_st)**2)
+        if self.strain_chi_st_model_params is not None:
+            m = self.strain_chi_st_model_params['slope']
+            b = self.strain_chi_st_model_params['intercept']
+            log_strain_rate = (np.log10(chi_st) - b) / m
+            strain_rate = 10**log_strain_rate
+        else:
+            strain_rate = chi_st * np.pi / np.exp(-2 * erfcinv(2 * self.Z_st)**2)
         return strain_rate
 
     def _estimate_flame_thickness(
@@ -271,10 +298,14 @@ class FlameletTableGenerator:
 
         return mdot_fuel, mdot_oxidizer
 
-    def _initialize_flame(self, grid: Optional[np.ndarray] = None):
+    def _initialize_flame(
+            self,
+            chi_st: float,
+            grid: Optional[np.ndarray] = None):
         """Set up the initial counterflow diffusion flame configuration.
 
         Args:
+            chi_st: The scalar dissipation rate at the stoichiometric mixture fraction
             grid: The grid for the flame object
         
         Initializes the Cantera flame object with appropriate grid, inlet conditions,
@@ -290,7 +321,7 @@ class FlameletTableGenerator:
         self.flame.P = self.pressure
         
         # Set inlet conditions
-        mdot_fuel, mdot_ox = self._mdots_from_chi_st(self.initial_chi_st)
+        mdot_fuel, mdot_ox = self._mdots_from_chi_st(chi_st)
         self.flame.fuel_inlet.mdot = mdot_fuel
         self.flame.fuel_inlet.X = self.fuel_inlet.composition
         self.flame.fuel_inlet.T = self.fuel_inlet.temperature
@@ -322,7 +353,9 @@ class FlameletTableGenerator:
         target_width = self.width_ratio * flame_thickness
         if self.flame is None:
             self.width = target_width
-            self._initialize_flame()
+            self._initialize_flame(self.initial_chi_st)
+            return
+        if not self.width_change_enable:
             return
         if np.abs(target_width - old_width) / old_width <= self.width_change_min:
             return
@@ -375,7 +408,9 @@ class FlameletTableGenerator:
             new_grid = np.concatenate(([0.0], new_grid, [self.width]))
         
         new_grid_norm = new_grid / self.width
-        self._initialize_flame(grid=new_grid)
+        self._initialize_flame(chi_st=self.initial_chi_st,
+                               grid=new_grid)
+        # ^ uses initial_chi_st but mdots will be overwritten below
         
         # Interpolate solution onto new grid
         scale_factor = self.width / old_width
@@ -448,7 +483,7 @@ class FlameletTableGenerator:
         
         # Get chi_st bounds for extinction branch
         chi_st_values = [sol['chi_st'] for sol in ignited_data]
-        chi_st_max = max(chi_st_values)
+        chi_st_max = max(chi_st_values) * 1.0e1
         chi_st_min = ignited_data[-1]['chi_st']  # Last point on unstable branch
         
         # Compute extinction branch
@@ -585,21 +620,21 @@ class FlameletTableGenerator:
                 
             except ct.CanteraError as err:
                 self.logger.debug(err)
-                if strain_rate / a_max < strain_rate_tol:
-                    self.logger.info(
-                        'SUCCESS! Traversed unstable branch down to '
-                        f'{100 * strain_rate / a_max:.2f}% of the maximum strain rate.'
-                    )
-                    break
                 
                 # Restore previous solution and reduce increment
                 self.flame.from_array(backup_state)
                 temperature_increment = 0.7 * temperature_increment
                 error_count += 1
                 if error_count > max_error_count:
-                    self.logger.warning(
-                        f'FAILURE! Stopping after {error_count} successive solver errors.'
-                    )
+                    if strain_rate / a_max < strain_rate_tol:
+                        self.logger.info(
+                            'SUCCESS! Traversed unstable branch down to '
+                            f'{100 * strain_rate / a_max:.2f}% of the maximum strain rate.'
+                        )
+                    else:
+                        self.logger.warning(
+                            f'FAILURE! Stopping after {error_count} successive solver errors.'
+                        )
                     break
                 self.logger.warning(
                     f"Solver did not converge on iteration {i}. "
@@ -649,6 +684,11 @@ class FlameletTableGenerator:
                 f"chi_st = {chi_st:.4e}, strain_rate = {strain_rate:.2f}"
             )
 
+            if chi_st < self.solutions[0]['metadata']['chi_st'] and not self.width_change_enable:
+                self.logger.info("SUCCESS! Traversed unstable branch down to initial chi_st.")
+                self.logger.info("Stopping because width changes are disabled. (Flame will start to grow beyond domain.)")
+                break
+
         self.logger.info(f'Stopped after {i} iterations')
         return data
 
@@ -690,47 +730,42 @@ class FlameletTableGenerator:
             dissipation rates. Solutions are saved to HDF5 files if output_path
             is provided.
         """
-        chi_st_values = np.geomspace(chi_st_min, chi_st_max, n_points)
+        chi_st_values = np.logspace(np.log10(chi_st_min), np.log10(chi_st_max), n_points)
+        chi_st_values = chi_st_values[::-1]
         data = []
 
-        self.gas.TPX = (self.fuel_inlet.temperature,
-                        self.pressure,
-                        self.fuel_inlet.composition)
-        Y_fuel = self.gas.Y
-
-        self.gas.TPX = (self.oxidizer_inlet.temperature,
-                        self.pressure,
-                        self.oxidizer_inlet.composition)
-        Y_ox = self.gas.Y
-
-        # Initialize with cold mixing profile
-        T_profile = np.ones_like(self.flame.grid) * self.fuel_inlet.temperature
-        Y_profile = np.zeros((self.gas.n_species, len(self.flame.grid)))
-        normalized_grid = (self.flame.grid - self.flame.grid[0]) / (self.flame.grid[-1] - self.flame.grid[0])
-        for i in range(len(self.flame.grid)):
-            x = normalized_grid[i]
-            T_profile[i] = self.fuel_inlet.temperature + \
-                x * (self.oxidizer_inlet.temperature - self.fuel_inlet.temperature)
-            for k, species in enumerate(self.gas.species_names):
-                Y_profile[k,i] = Y_fuel[k] + x * (Y_ox[k] - Y_fuel[k])
-        
-        self.flame.set_profile('T', normalized_grid, T_profile)
-        for k, species in enumerate(self.gas.species_names):
-            self.flame.set_profile(species, normalized_grid, Y_profile[k,:])
-        
-        for chi_st in chi_st_values:
-            # Update flame width before each solution attempt
-            self._update_flame_width(solve=True)
-            self._enable_two_point_control()
+        iter = 0
+        while iter < 3:
+            self._initialize_flame(chi_st=chi_st_max)
+            try:
+                self.flame.solve(loglevel=self.solver_loglevel)
+            except:
+                self.logger.error(f"Failed to compute initial solution at chi_st = {chi_st_max:.2e}")
+                return data
             
-            mdot_fuel, mdot_oxidizer = self._mdots_from_chi_st(chi_st)
+            if self.flame.extinct():
+                self.logger.info(f"Computed initial solution at chi_st = {chi_st_max:.2e} as cold mixing")
+                break
+            
+            self.logger.warning(f"Failed to compute initial solution at chi_st = {chi_st_max:.2e} (autoignited)")
+            chi_st_max = 1.0e1 * chi_st_max
+            chi_st_values = np.geomspace(chi_st_min, chi_st_max, n_points)
+            chi_st_values = chi_st_values[::-1]
+            self.logger.info(f"Retrying with chi_st_max = {chi_st_max:.2e}")
+        
+        for i, chi_st in enumerate(chi_st_values):
+            mdot_fuel, mdot_ox = self._mdots_from_chi_st(chi_st)
             self.flame.fuel_inlet.mdot = mdot_fuel
-            self.flame.oxidizer_inlet.mdot = mdot_oxidizer
+            self.flame.oxidizer_inlet.mdot = mdot_ox
             
             try:
                 self.flame.solve(loglevel=self.solver_loglevel)
             except:
                 self.logger.warning(f"Failed to compute solution at chi_st = {chi_st:.2e}")
+                continue
+
+            if not self.flame.extinct():
+                self.logger.warning(f"Failed to compute solution at chi_st = {chi_st:.2e} (autoignited)")
                 continue
             
             # Compute postprocessing data
@@ -743,7 +778,6 @@ class FlameletTableGenerator:
             s = np.where(self.flame.T > T_mid)[0][[0, -1]]
             width = self.flame.grid[s[1]] - self.flame.grid[s[0]]
             strain_rate = self.flame.strain_rate('max')
-            a_max = max(strain_rate, a_max)
             step_data = {
                 'T_max': T_max,
                 'T_st': T_st,
@@ -885,8 +919,7 @@ class FlameletTableGenerator:
                 mechanism_file=params['mechanism_file'],
                 fuel_inlet=fuel_inlet,
                 oxidizer_inlet=oxidizer_inlet,
-                pressure=params['pressure'],
-                width=params['width']
+                pressure=params['pressure']
             )
             
             # Load solutions
@@ -909,6 +942,33 @@ class FlameletTableGenerator:
             generator.solutions[solution_index]['state'].restore(filename, state_name)
 
         return generator
+    
+    def learn_strain_chi_st_mapping(self, output_file: Optional[str] = None):
+        """Learn a mapping between strain rate and scalar dissipation rate at stoichiometry.
+
+        Args:
+            output_file: Optional file path to save the mapping as a JSON file
+        
+        Note:
+            This method uses the computed solutions to learn a mapping between strain rate
+            and scalar dissipation rate at the stoichiometric mixture fraction. The mapping
+            is learned using a simple linear regression model.
+        """
+        from scipy.stats import linregress
+        X = np.array([np.log10(sol['metadata']['strain_rate']) for sol in self.solutions]).reshape(-1, 1)
+        y = np.array([np.log10(sol['metadata']['chi_st']) for sol in self.solutions])
+        slope, intercept, r_value, p_value, std_err = linregress(X.ravel(), y)
+        self.strain_chi_st_model_params = {
+            'slope': slope,
+            'intercept': intercept,
+            'r_value': r_value,
+            'p_value': p_value,
+            'std_err': std_err
+        }
+
+        if output_file is not None:
+            with open(output_file, 'w') as f:
+                json.dump(self.strain_chi_st_model_params, f)
 
     def plot_s_curve(
         self,
@@ -928,21 +988,21 @@ class FlameletTableGenerator:
         """
         import matplotlib.pyplot as plt
         plt.rcParams.update(pyplot_params)
-        
+
         x_values = [d['metadata'][x_quantity] for d in self.solutions]
         y_values = [d['metadata'][y_quantity] for d in self.solutions]
-        
+
         # Set up axis labels
         x_labels = {
             'strain_rate': r"$\alpha$ [1/s]",
             'chi_st': r"$\chi_{st}$ [1/s]"
         }
-        
+
         y_labels = {
             'T_max': r"$T_\textrm{max}$ [K]",
             'T_st': r"$T_{st}$ [K]"
         }
-        
+
         fig, ax = plt.subplots()
         ax.semilogx(x_values, y_values, 'o-')
         ax.set_xlabel(x_labels[x_quantity])
@@ -950,10 +1010,10 @@ class FlameletTableGenerator:
         ax.set_xmargin(0.1)
         ax.set_ymargin(0.1)
         ax.grid(True, which="both", ls="-", alpha=0.2)
-        
+
         if output_file:
             fig.savefig(output_file, bbox_inches='tight', dpi=300)
-        
+
         return fig, ax
     
     def plot_temperature_profiles(
@@ -1064,6 +1124,37 @@ class FlameletTableGenerator:
         ax.set_xlabel(r"$Z$ [-]")
         ax.set_ylabel(r"$T$ [K]")
         ax.grid(True, alpha=0.2)
+        
+        if output_file:
+            fig.savefig(output_file, bbox_inches='tight', dpi=300)
+        
+        return fig, ax
+
+    def plot_strain_chi_st(self, output_file: Optional[str] = None):
+        """Plot the strain rate vs scalar dissipation rate at stoichiometric mixture fraction.
+        
+        Args:
+            output_file: Optional file path to save the figure
+
+        Returns:
+            Tuple[Figure, Axes]: Matplotlib figure and axes objects
+        """
+        import matplotlib.pyplot as plt
+        plt.rcParams.update(pyplot_params)
+        
+        strain_rates = [sol['metadata']['strain_rate'] for sol in self.solutions]
+        chi_st_values = [sol['metadata']['chi_st'] for sol in self.solutions]
+        
+        fig, ax = plt.subplots()
+        ax.scatter(chi_st_values, strain_rates)
+        ax.set_xscale('log')
+        ax.set_yscale('log')
+        ax.set_xlabel(r"$\chi_{st}$ [1/s]")
+        ax.set_ylabel(r"$\alpha$ [1/s]")
+        ax.set_xmargin(0.1)
+        ax.set_ymargin(0.1)
+        ax.set_axisbelow(True)
+        ax.grid(True, which="both", ls="-", alpha=0.2)
         
         if output_file:
             fig.savefig(output_file, bbox_inches='tight', dpi=300)

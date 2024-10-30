@@ -119,10 +119,12 @@ def create_generator(config: dict) -> FlameletTableGenerator:
         oxidizer_inlet=oxidizer_inlet,
         pressure=config['conditions'].get('pressure'),
         width_ratio=config['solver'].get('width_ratio'),
+        width_change_enable=config['solver'].get('width_change_enable'),
         width_change_max=config['solver'].get('width_change_max'),
         width_change_min=config['solver'].get('width_change_min'),
         initial_chi_st=config['conditions'].get('initial_chi_st'),
-        solver_loglevel=config['solver'].get('options').get('loglevel')
+        solver_loglevel=config['solver'].get('options').get('loglevel'),
+        strain_chi_st_model_param_file=config['solver'].get('strain_chi_st_model_param_file')
     )
 
 def main():
@@ -134,7 +136,7 @@ def main():
     
     Command-line Arguments:
         config: Path to TOML configuration file
-        --output, -o: Output directory (overrides config file)
+        --output, -o: Output directory (overwrites config file)
         --verbose, -v: Enable verbose logging
     
     Returns:
@@ -203,6 +205,12 @@ def main():
             output_path=output_dir,
             n_extinction_points=n_extinction_points,
             **solver_options
+        )
+
+        # Learn the strain rate and chi_st relationship
+        logger.info("Learning the strain rate and chi_st relationship")
+        generator.learn_strain_chi_st_mapping(
+            output_file=output_dir / 'strain_chi_st.json'
         )
         
         # Create plots if requested
