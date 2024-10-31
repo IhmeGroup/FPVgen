@@ -1,7 +1,8 @@
 # plot_flamelets.py
 """
 Script to load flamelet solutions and generate plots.
-Usage: python plot_flamelets.py solutions.h5
+Usage:
+    python plot_flamelets.py <solutions_file> [-o <output_dir>] [-v]
 """
 import argparse
 import logging
@@ -49,7 +50,12 @@ def main():
         # Generate strain vs chi_st plot
         logger.info("Generating strain vs chi_st plot")
         generator.plot_strain_chi_st(
-            output_file=output_dir / 'strain_chi_st.png'
+            strain_rate_type='max',
+            output_file=output_dir / 'strain_max_chi_st.png'
+        )
+        generator.plot_strain_chi_st(
+            strain_rate_type='nom',
+            output_file=output_dir / 'strain_nom_chi_st.png'
         )
         
         logger.info("Plot generation completed successfully")

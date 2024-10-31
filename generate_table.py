@@ -10,7 +10,7 @@ configuration files in TOML format. It handles the complete workflow of:
 - Saving solutions and generating visualization plots
 
 Usage:
-    python generate_table.py config.toml [--output OUTPUT_DIR] [--verbose]
+    python generate_table.py <config> [--verbose]
 
 Configuration File Format:
     The TOML configuration file must contain the following sections:
@@ -136,7 +136,6 @@ def main():
     
     Command-line Arguments:
         config: Path to TOML configuration file
-        --output, -o: Output directory (overwrites config file)
         --verbose, -v: Enable verbose logging
     
     Returns:
@@ -149,8 +148,6 @@ def main():
     )
     parser.add_argument('config', type=Path, 
                        help='Path to TOML configuration file')
-    parser.add_argument('--output', '-o', type=Path,
-                       help='Output directory (default: specified in config)')
     parser.add_argument('--verbose', '-v', action='store_true',
                        help='Enable verbose logging')
     args = parser.parse_args()
@@ -168,7 +165,7 @@ def main():
         config = load_config(args.config)
         
         # Set output directory
-        output_dir = args.output or Path(config['solver'].get('output_dir', 'flamelet_results'))
+        output_dir = Path(config['solver'].get('output_dir', 'flamelet_results'))
         output_dir.mkdir(parents=True, exist_ok=True)
         logger.info(f"Output directory: {output_dir}")
         
@@ -212,6 +209,12 @@ def main():
         generator.learn_strain_chi_st_mapping(
             output_file=output_dir / 'strain_chi_st.json'
         )
+
+        # Assemble the FPV table
+        logger.info("Assembling the FPV table")
+        generator.assemble_FPV_table_CharlesX(
+            output_file=output_dir / 'fpv_table.h5'
+        )
         
         # Create plots if requested
         if config['solver'].get('create_plots', True):
@@ -223,6 +226,14 @@ def main():
             generator.plot_temperature_profiles(
                 output_file=output_dir / 'temperature_profiles.png',
                 **config.get('plotting', {}).get('profiles', {})
+            )
+            generator.plot_strain_chi_st(
+                strain_rate_type='max',
+                output_file=output_dir / 'strain_max_chi_st.png'
+            )
+            generator.plot_strain_chi_st(
+                strain_rate_type='nom',
+                output_file=output_dir / 'strain_nom_chi_st.png'
             )
         
         logger.info("Flamelet generation completed successfully")

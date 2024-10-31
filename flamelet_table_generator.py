@@ -230,16 +230,15 @@ class FlameletTableGenerator:
         Returns:
             float: Estimated flame thickness [m]
         """
-        self.gas.TPX = (0.5 * (self.fuel_inlet.temperature + self.oxidizer_inlet.temperature),
-                        self.pressure,
-                        self.fuel_inlet.composition)
         if strain_rate is not None:
-            thermal_diffusivity = self.gas.thermal_conductivity / (self.gas.density * self.gas.cp_mass)
-            return np.sqrt(thermal_diffusivity / strain_rate)
+            chi_st = self._estimate_chi_st_from_strain(strain_rate)
+            return self._estimate_flame_thickness(chi_st=chi_st)
         elif chi_st is not None:
-            # Estimate strain rate from chi_st
-            strain_rate = self._estimate_strain_from_chi_st(chi_st)
-            return self._estimate_flame_thickness(strain_rate=strain_rate)
+            self.gas.TPX = (0.5 * (self.fuel_inlet.temperature + self.oxidizer_inlet.temperature),
+                            self.pressure,
+                            self.fuel_inlet.composition)
+            thermal_diffusivity = self.gas.thermal_conductivity / (self.gas.density * self.gas.cp_mass)
+            return np.sqrt(thermal_diffusivity / chi_st)
         else:
             raise ValueError("Either strain_rate or chi_st must be provided.")
     
@@ -289,14 +288,33 @@ class FlameletTableGenerator:
         target_strain = self._estimate_strain_from_chi_st(chi_st)
         
         # Set velocities to achieve target strain while maintaining momentum balance
-        v_fuel = np.sqrt(target_strain * self.width) / 2
-        v_ox = v_fuel * np.sqrt(rho_fuel / rho_ox)
-        
+        v_tot = target_strain * self.width / 2
+        v_fuel = v_tot / (1 + np.sqrt(rho_fuel / rho_ox))
+        v_ox = v_tot - v_fuel
+
         # Convert to mass fluxes
         mdot_fuel = rho_fuel * v_fuel
         mdot_oxidizer = rho_ox * v_ox
 
         return mdot_fuel, mdot_oxidizer
+    
+    def _strain_rate_nominal(self) -> float:
+        """Compute the nominal strain rate based on the input velocities.
+
+        Returns:
+            float: Nominal strain rate [1/s]
+        """
+        self.gas.TPX = (self.fuel_inlet.temperature,
+                        self.pressure,
+                        self.fuel_inlet.composition)
+        rho_fuel = self.gas.density
+        self.gas.TPX = (self.oxidizer_inlet.temperature,
+                        self.pressure,
+                        self.oxidizer_inlet.composition)
+        rho_ox = self.gas.density
+        v_fuel = self.flame.fuel_inlet.mdot / rho_fuel
+        v_ox = self.flame.oxidizer_inlet.mdot / rho_ox
+        return 2 * (v_fuel + v_ox) / self.width
 
     def _initialize_flame(
             self,
@@ -532,7 +550,8 @@ class FlameletTableGenerator:
                 of each computed solution point. Each dictionary includes:
                 - T_max: Maximum temperature [K]
                 - T_st: Temperature at stoichiometric mixture fraction [K]
-                - strain_rate: Maximum strain rate [1/s]
+                - strain_rate_max: Maximum strain rate [1/s]
+                - strain_rate_nom: Nominal strain rate [1/s]
                 - chi_st: Scalar dissipation rate at stoichiometric mixture fraction [1/s]
                 - total_heat_release_rate: Integrated heat release rate [W/m³]
                 - n_points: Number of grid points
@@ -564,8 +583,7 @@ class FlameletTableGenerator:
             temperature_increment = restart_solution['metadata']['Tc_increment']
             
             # Get maximum strain rate from previous solutions
-            a_max = max(sol['metadata']['strain_rate'] for sol in self.solutions[:restart_from+1])
-            strain_rate = restart_solution['metadata']['strain_rate']
+            a_max = max(sol['metadata']['strain_rate_max'] for sol in self.solutions[:restart_from+1])
             
             # Initialize data with previous solutions
             data = [sol['metadata'] for sol in self.solutions[:restart_from+1]]
@@ -577,11 +595,12 @@ class FlameletTableGenerator:
             self.logger.info('Computing the initial solution')
             self.flame.solve(loglevel=self.solver_loglevel, auto=True)
             T_max = np.max(self.flame.T)
-            strain_rate = self.flame.strain_rate('max')
-            a_max = strain_rate
+            strain_rate_max = self.flame.strain_rate('max')
+            strain_rate_max_glob = strain_rate_max
             data = []
             start_iteration = 0
         
+        self.logger.info('Beginning s-curve computation')
         error_count = 0
         for i in range(start_iteration, n_max):
             # Update flame width if we are attempting a new point
@@ -593,7 +612,7 @@ class FlameletTableGenerator:
             backup_state = self.flame.to_array()
 
             # Update control temperatures
-            spacing = unstable_spacing if strain_rate <= 0.98 * a_max else initial_spacing
+            spacing = unstable_spacing if strain_rate_max <= 0.98 * strain_rate_max_glob else initial_spacing
             control_temperature = (np.min(self.flame.T) + 
                                    spacing * (np.max(self.flame.T) - np.min(self.flame.T)))
             self.logger.debug(f'Iteration {i}: Control temperature = {control_temperature:.2f} K')
@@ -626,10 +645,10 @@ class FlameletTableGenerator:
                 temperature_increment = 0.7 * temperature_increment
                 error_count += 1
                 if error_count > max_error_count:
-                    if strain_rate / a_max < strain_rate_tol:
+                    if strain_rate_max / strain_rate_max_glob < strain_rate_tol:
                         self.logger.info(
                             'SUCCESS! Traversed unstable branch down to '
-                            f'{100 * strain_rate / a_max:.2f}% of the maximum strain rate.'
+                            f'{100 * strain_rate_max / strain_rate_max_glob:.2f}% of the maximum strain rate.'
                         )
                     else:
                         self.logger.warning(
@@ -651,12 +670,14 @@ class FlameletTableGenerator:
             T_mid = 0.5 * (min(self.flame.T) + max(self.flame.T))
             s = np.where(self.flame.T > T_mid)[0][[0, -1]]
             width = self.flame.grid[s[1]] - self.flame.grid[s[0]]
-            strain_rate = self.flame.strain_rate('max')
-            a_max = max(strain_rate, a_max)
+            strain_rate_max = self.flame.strain_rate('max')
+            strain_rate_nom = self._strain_rate_nominal()
+            strain_rate_max_glob = max(strain_rate_max, strain_rate_max_glob)
             step_data = {
                 'T_max': T_max,
                 'T_st': T_st,
-                'strain_rate': strain_rate,
+                'strain_rate_max': strain_rate_max,
+                'strain_rate_nom': strain_rate_nom,
                 'chi_st': chi_st,
                 'total_heat_release_rate': np.trapz(self.flame.heat_release_rate, self.flame.grid),
                 'n_points': len(self.flame.grid),
@@ -681,7 +702,8 @@ class FlameletTableGenerator:
             # Logging after successful solution
             self.logger.info(
                 f"Iteration {i} completed: T_max = {T_max:.2f}, T_st = {T_st:.2f}, "
-                f"chi_st = {chi_st:.4e}, strain_rate = {strain_rate:.2f}"
+                f"chi_st = {chi_st:.4e}, strain_rate_max = {strain_rate_max:.2f}, "
+                f"strain_rate_nom = {strain_rate_nom:.2f}"
             )
 
             if chi_st < self.solutions[0]['metadata']['chi_st'] and not self.width_change_enable:
@@ -717,7 +739,8 @@ class FlameletTableGenerator:
                 of each computed solution point. Each dictionary includes:
                 - T_max: Maximum temperature [K]
                 - T_st: Temperature at stoichiometric mixture fraction [K]
-                - strain_rate: Maximum strain rate [1/s]
+                - strain_rate_max: Maximum strain rate [1/s]
+                - strain_rate_nom: Nominal strain rate [1/s]
                 - chi_st: Scalar dissipation rate at stoichiometric mixture fraction [1/s]
                 - total_heat_release_rate: Integrated heat release rate [W/m³]
                 - n_points: Number of grid points
@@ -777,11 +800,13 @@ class FlameletTableGenerator:
             T_mid = 0.5 * (min(self.flame.T) + max(self.flame.T))
             s = np.where(self.flame.T > T_mid)[0][[0, -1]]
             width = self.flame.grid[s[1]] - self.flame.grid[s[0]]
-            strain_rate = self.flame.strain_rate('max')
+            strain_rate_max = self.flame.strain_rate('max')
+            strain_rate_nom = self._strain_rate_nominal()
             step_data = {
                 'T_max': T_max,
                 'T_st': T_st,
-                'strain_rate': strain_rate,
+                'strain_rate_max': strain_rate_max,
+                'strain_rate_nom': strain_rate_nom,
                 'chi_st': chi_st,
                 'total_heat_release_rate': np.trapz(self.flame.heat_release_rate, self.flame.grid),
                 'n_points': len(self.flame.grid),
@@ -804,7 +829,8 @@ class FlameletTableGenerator:
             # Logging after successful solution
             self.logger.info(
                 f"Iteration {i} completed: T_max = {T_max:.2f}, T_st = {T_st:.2f}, "
-                f"chi_st = {chi_st:.4e}, strain_rate = {strain_rate:.2f}"
+                f"chi_st = {chi_st:.4e}, strain_rate_max = {strain_rate_max:.2f}, "
+                f"strain_rate_nom = {strain_rate_nom:.2f}"
             )
         
         self.logger.info(f'Completed {len(data)} points on the extinction branch')
@@ -955,7 +981,7 @@ class FlameletTableGenerator:
             is learned using a simple linear regression model.
         """
         from scipy.stats import linregress
-        X = np.array([np.log10(sol['metadata']['strain_rate']) for sol in self.solutions]).reshape(-1, 1)
+        X = np.array([np.log10(sol['metadata']['strain_rate_nom']) for sol in self.solutions]).reshape(-1, 1)
         y = np.array([np.log10(sol['metadata']['chi_st']) for sol in self.solutions])
         slope, intercept, r_value, p_value, std_err = linregress(X.ravel(), y)
         self.strain_chi_st_model_params = {
@@ -972,14 +998,14 @@ class FlameletTableGenerator:
 
     def plot_s_curve(
         self,
-        x_quantity: Literal['strain_rate', 'chi_st'] = 'chi_st',
+        x_quantity: Literal['strain_rate_max', 'chi_st'] = 'chi_st',
         y_quantity: Literal['T_max', 'T_st'] = 'T_max',
         output_file: Optional[str] = None
     ):
         """Plot the S-curve with configurable axes.
         
         Args:
-            x_quantity: Which quantity to plot on x-axis ('strain_rate' or 'chi_st')
+            x_quantity: Which quantity to plot on x-axis ('strain_rate_max' or 'chi_st')
             y_quantity: Which quantity to plot on y-axis ('T_max' or 'T_st')
             output_file: Optional file path to save the figure
         
@@ -994,7 +1020,7 @@ class FlameletTableGenerator:
 
         # Set up axis labels
         x_labels = {
-            'strain_rate': r"$\alpha$ [1/s]",
+            'strain_rate_max': r"$\alpha$ [1/s]",
             'chi_st': r"$\chi_{st}$ [1/s]"
         }
 
@@ -1085,6 +1111,7 @@ class FlameletTableGenerator:
         """
         import matplotlib.pyplot as plt
         from matplotlib.colors import LogNorm
+        plt.rcParams.update(pyplot_params)
         
         if self.flame is None:
             raise ValueError("Flame has not been initialized. Please initialize the flame first.")
@@ -1111,6 +1138,7 @@ class FlameletTableGenerator:
         """
         import matplotlib.pyplot as plt
         from matplotlib.colors import LogNorm
+        plt.rcParams.update(pyplot_params)
         
         if self.flame is None:
             raise ValueError("Flame has not been initialized. Please initialize the flame first.")
@@ -1130,7 +1158,11 @@ class FlameletTableGenerator:
         
         return fig, ax
 
-    def plot_strain_chi_st(self, output_file: Optional[str] = None):
+    def plot_strain_chi_st(
+        self,
+        strain_rate_type: Literal['max', 'nom'] = 'nom',
+        output_file: Optional[str] = None
+    ):
         """Plot the strain rate vs scalar dissipation rate at stoichiometric mixture fraction.
         
         Args:
@@ -1141,8 +1173,8 @@ class FlameletTableGenerator:
         """
         import matplotlib.pyplot as plt
         plt.rcParams.update(pyplot_params)
-        
-        strain_rates = [sol['metadata']['strain_rate'] for sol in self.solutions]
+
+        strain_rates = [sol['metadata'][f'strain_rate_{strain_rate_type}'] for sol in self.solutions]
         chi_st_values = [sol['metadata']['chi_st'] for sol in self.solutions]
         
         fig, ax = plt.subplots()
