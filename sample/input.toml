@@ -6,7 +6,9 @@
 # solution_index = 50
 
 [mechanism]
-file = "gri30.yaml"  # Path to mechanism file
+file = "gri30.yaml"                                      # Path to mechanism file
+transport_model = "mixture-averaged"                     # Transport model: "unity-Lewis-number", "mixture-averaged", or "multicomponent"
+prog_def = { CO = 1.0, H2 = 1.0, CO2 = 1.0, H2O = 1.0 }  # Progress variable definition
 
 [conditions]
 pressure = 101325.0      # Operating pressure in Pa
@@ -27,21 +29,17 @@ width_ratio = 10.0               # Ratio of domain width to flame thickness
 width_change_enable = false      # Enable domain width changes
 width_change_max = 0.1           # Maximum domain width change
 width_change_min = 0.05          # Minimum domain width change
-# strain_chi_st_model_param_file = "strain_chi_st.json"
-                                 # File to save strain rate model parameters
-
-# Solver options passed to compute_s_curve
-[solver.options]
-n_max = 5000                   # Maximum number of iterations
-initial_spacing = 0.6          # Initial control point spacing
-unstable_spacing = 0.95        # Control point spacing for unstable branch
-temperature_increment = 20.0   # Initial temperature increment
-max_increment = 100.0          # Maximum temperature increment
-target_delta_T_max = 20.0      # Target maximum temperature change
-max_error_count = 3            # Maximum consecutive solver errors
-strain_rate_tol = 0.01         # Minimum strain rate ratio for termination
-n_extinction_points = 10       # Number of points to solve along the extinction branch
-loglevel = 0                   # Log level for the Cantera solver
+n_max = 5000                     # Maximum number of iterations
+initial_spacing = 0.6            # Initial control point spacing
+unstable_spacing = 0.95          # Control point spacing for unstable branch
+temperature_increment = 20.0     # Initial temperature increment
+max_increment = 100.0            # Maximum temperature increment
+target_delta_T_max = 20.0        # Target maximum temperature change
+max_error_count = 3              # Maximum consecutive solver errors
+strain_rate_tol = 0.01           # Minimum strain rate ratio for termination
+n_extinction_points = 10         # Number of points to solve along the extinction branch
+write_FlameMaster = true         # Write each solution in FlameMaster format
+loglevel = 0                     # Log level for the Cantera solver
 
 # Plotting options
 [plotting.s_curve]

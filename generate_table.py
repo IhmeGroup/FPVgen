@@ -115,15 +115,17 @@ def create_generator(config: dict) -> FlameletTableGenerator:
     # Create generator
     return FlameletTableGenerator(
         mechanism_file=config['mechanism']['file'],
+        transport_model=config['mechanism'].get('transport_model'),
         fuel_inlet=fuel_inlet,
         oxidizer_inlet=oxidizer_inlet,
         pressure=config['conditions'].get('pressure'),
+        prog_def=config['mechanism'].get('prog_def'),
         width_ratio=config['solver'].get('width_ratio'),
         width_change_enable=config['solver'].get('width_change_enable'),
         width_change_max=config['solver'].get('width_change_max'),
         width_change_min=config['solver'].get('width_change_min'),
         initial_chi_st=config['conditions'].get('initial_chi_st'),
-        solver_loglevel=config['solver'].get('options').get('loglevel'),
+        solver_loglevel=config['solver'].get('loglevel'),
         strain_chi_st_model_param_file=config['solver'].get('strain_chi_st_model_param_file')
     )
 
@@ -186,21 +188,20 @@ def main():
             logger.info("Initializing new flamelet generator")
             generator = create_generator(config)
             restart_from = None
+        
+        # Pop some solver options that are not passed to compute_s_curve
+        solver_options = config['solver']
+        create_plots = solver_options.pop('create_plots', True)
+        solver_options.pop('width_ratio', None)
+        solver_options.pop('width_change_enable', None)
+        solver_options.pop('width_change_max', None)
+        solver_options.pop('width_change_min', None)
+        solver_options.pop('loglevel', None)
 
         # Compute flamelets
         logger.info("Computing flamelet solutions")
-        solver_options = config['solver'].get('options', {})
-        n_extinction_points = config['solver'].get('n_extinction_points', 10)
-        solver_options.pop('n_extinction_points', None)
-        solver_options.pop('loglevel', None)
-        
-        # Add restart parameter to solver options
-        if restart_from is not None:
-            solver_options['restart_from'] = restart_from
-            
+        solver_options = config.get('solver', {})
         generator.compute_s_curve(
-            output_path=output_dir,
-            n_extinction_points=n_extinction_points,
             **solver_options
         )
 
@@ -215,9 +216,9 @@ def main():
         generator.assemble_FPV_table_CharlesX(
             output_file=output_dir / 'fpv_table.h5'
         )
-        
+
         # Create plots if requested
-        if config['solver'].get('create_plots', True):
+        if create_plots:
             logger.info("Creating visualization plots")
             generator.plot_s_curve(
                 output_file=output_dir / 's_curve.png',
