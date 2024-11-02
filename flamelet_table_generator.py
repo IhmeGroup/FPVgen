@@ -1134,7 +1134,15 @@ class FlameletTableGenerator:
             for k in range(self.gas.n_species):
                 f.write(f"{self.gas.species_names[k]}\t1")
     
-    def assemble_FPV_table_CharlesX(self, output_dir: str):
+    def assemble_FPV_table_CharlesX(
+        self,
+        output_dir: str,
+        dims: Tuple[int, int, int] = (100, 2, 100),
+        force_monotonicity: bool = False,
+        igniting_table: bool = False,
+        include_species_mass_fractions: List[str] = [],
+        include_species_production_rates: List[str] = []
+    ):
         raise NotImplementedError("CharlesX FPV table assembly is not yet implemented")
     
     def learn_strain_chi_st_mapping(self, output_file: Optional[str] = None):
