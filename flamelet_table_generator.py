@@ -298,11 +298,13 @@ class FlameletTableGenerator:
             float: Measured flame thickness [m]
         """
         if self.flame.extinct():
-            # Placeholder to prevent mesh update
-            return self.width / self.width_ratio
-            # Alternative - use estimate
-            strain_rate = self.flame.strain_rate('max')
-            return self._estimate_flame_thickness(strain_rate=strain_rate)
+            # Flame is extinguished
+            return 0.0
+            # # Placeholder to prevent mesh update
+            # return self.width / self.width_ratio
+            # # Alternative - use estimate
+            # strain_rate = self.flame.strain_rate('max')
+            # return self._estimate_flame_thickness(strain_rate=strain_rate)
         else:
             T_max = np.max(self.flame.T)
             T_threshold = 0.5 * T_max
@@ -725,9 +727,7 @@ class FlameletTableGenerator:
             interp_T = interpolate.interp1d(Z, self.flame.T)
             T_st = float(interp_T(self.Z_st))
             T_max = max(self.flame.T)
-            T_mid = 0.5 * (min(self.flame.T) + max(self.flame.T))
-            s = np.where(self.flame.T > T_mid)[0][[0, -1]]
-            width = self.flame.grid[s[1]] - self.flame.grid[s[0]]
+            width = self._measure_flame_thickness()
             strain_rate_max = self.flame.strain_rate('max')
             strain_rate_nom = self._strain_rate_nominal()
             strain_rate_max_glob = max(strain_rate_max, strain_rate_max_glob)
@@ -815,7 +815,10 @@ class FlameletTableGenerator:
             dissipation rates. Solutions are saved to HDF5 files if output_dir
             is provided.
         """
-        breakpoint()
+        if output_dir:
+            output_dir = Path(output_dir)
+            output_dir.mkdir(parents=True, exist_ok=True)
+
         chi_st_values = np.logspace(np.log10(chi_st_min), np.log10(chi_st_max), n_points)
         chi_st_values = chi_st_values[::-1]
         data = []
@@ -833,14 +836,15 @@ class FlameletTableGenerator:
                 self.logger.info(f"Computed initial solution at chi_st = {chi_st_max:.2e} as cold mixing")
                 break
             
-            self.logger.warning(f"Failed to compute initial solution at chi_st = {chi_st_max:.2e} (autoignited)")
+            T_max = np.max(self.flame.T)
+            self.logger.warning(f"Failed to compute initial solution at chi_st = {chi_st_max:.2e} (autoignited, T_max = {T_max:.2f})")
             chi_st_max = 1.0e1 * chi_st_max
             chi_st_values = np.geomspace(chi_st_min, chi_st_max, n_points)
             chi_st_values = chi_st_values[::-1]
             self.logger.info(f"Retrying with chi_st_max = {chi_st_max:.2e}")
         
-        for i, chi_st in enumerate(chi_st_values):
-            mdot_fuel, mdot_ox = self._mdots_from_chi_st(chi_st)
+        for i, chi_st_i in enumerate(chi_st_values):
+            mdot_fuel, mdot_ox = self._mdots_from_chi_st(chi_st_i)
             self.flame.fuel_inlet.mdot = mdot_fuel
             self.flame.oxidizer_inlet.mdot = mdot_ox
             
@@ -851,7 +855,8 @@ class FlameletTableGenerator:
                 continue
 
             if not self.flame.extinct():
-                self.logger.warning(f"Failed to compute solution at chi_st = {chi_st:.2e} (autoignited)")
+                T_max = np.max(self.flame.T)
+                self.logger.warning(f"Failed to compute solution at chi_st = {chi_st:.2e} (autoignited, T_max = {T_max:.2f})")
                 continue
             
             # Compute postprocessing data
@@ -860,9 +865,7 @@ class FlameletTableGenerator:
             interp_T = interpolate.interp1d(Z, self.flame.T)
             T_st = float(interp_T(self.Z_st))
             T_max = max(self.flame.T)
-            T_mid = 0.5 * (min(self.flame.T) + max(self.flame.T))
-            s = np.where(self.flame.T > T_mid)[0][[0, -1]]
-            width = self.flame.grid[s[1]] - self.flame.grid[s[0]]
+            width = self._measure_flame_thickness()
             strain_rate_max = self.flame.strain_rate('max')
             strain_rate_nom = self._strain_rate_nominal()
             step_data = {
@@ -1077,7 +1080,7 @@ class FlameletTableGenerator:
             f.write(f"Z_st = {self.Z_st} [1/s]\n")
             f.write(f"chi_st = {solution['metadata']['chi_st']} [1/s]\n")
             f.write(f"ConstantLewisNumbers = \"False\"\n")
-            f.write(f"FlameLoc = {self._compute_flame_loc_Z():0.5e}")
+            f.write(f"FlameLoc = {self._compute_flame_loc_Z():0.5e}\n")
             f.write(f"Tmax = {solution['metadata']['T_max']} [K]\n")
             f.write(f"\n")
             f.write(f"FuelSide\n")
@@ -1132,7 +1135,7 @@ class FlameletTableGenerator:
             # (These are the lewis numbers, which we'll set to 1 here regardless of self.transport_model)
             f.write(f"trailer\n")
             for k in range(self.gas.n_species):
-                f.write(f"{self.gas.species_names[k]}\t1")
+                f.write(f"{self.gas.species_names[k]}\t1\n")
     
     def assemble_FPV_table_CharlesX(
         self,

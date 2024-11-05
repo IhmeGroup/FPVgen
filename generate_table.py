@@ -212,10 +212,10 @@ def main():
         )
 
         # Assemble the FPV table
-        logger.info("Assembling the FPV table")
-        generator.assemble_FPV_table_CharlesX(
-            output_file=output_dir / 'fpv_table.h5'
-        )
+        # logger.info("Assembling the FPV table")
+        # generator.assemble_FPV_table_CharlesX(
+        #     output_dir=output_dir
+        # )
 
         # Create plots if requested
         if create_plots:
