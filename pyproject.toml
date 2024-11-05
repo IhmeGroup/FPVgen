@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "FPVgen"
+version = "0.1.0"
+description = "A software tool for generating flamelet tables for combustion simulations."
+authors = [
+    { name = "FX Laboratory"},
+    { name = "Matthew Bonanni", email = "mbonanni001@gmail.com" }
+]
+license = { text = "MIT" }
+dependencies = [
+    "numpy",
+    "scipy",
+    "matplotlib",
+    "pandas",
+    "h5py",
+    "tomli",
+    "cantera @ git+https://github.com/Cantera/cantera.git@main"
+]
