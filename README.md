@@ -31,7 +31,7 @@ To install FPVgen, follow these steps:
 
 ## Basic Structure of an Input File
 
-The input file for FPVgen uses TOML format. Below is an example of the structure of an input file:
+The input file for FPVgen uses TOML format. Below is an example of the structure of a minimal input file:
 
 ```toml
 # input.toml
@@ -54,6 +54,8 @@ temperature = 300.0          # Temperature in K
 composition = { O2 = 0.21, N2 = 0.79 }  # Air
 temperature = 300.0                     # Temperature in K
 ```
+
+A comprehensive input file with all available options may be found at [sample/input.toml](sample/input.toml)
 
 ## Usage
 
