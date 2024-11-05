@@ -126,6 +126,7 @@ class FlameletTableGenerator:
         # Initialization
         self.gas = ct.Solution(self.mechanism_file)
         self.Z_st = self._compute_stoichiometric_mixture_fraction()
+        self.logger.info("Z_st = {:.8f}".format(self.Z_st))
         self.width = 1.0 # Needed for initial flame construction but will be overridden
         self.flame = None
         self.solutions = []
@@ -563,12 +564,15 @@ class FlameletTableGenerator:
         
         # Compute extinction branch
         self.logger.info("Computing extinction branch")
-        extinct_data = self.compute_extinct_branch(
-            chi_st_min=chi_st_min,
-            chi_st_max=chi_st_max,
-            n_points=n_extinction_points,
-            output_dir=output_dir,
-            write_FlameMaster=write_FlameMaster)
+        if n_extinction_points > 0:
+            extinct_data = self.compute_extinct_branch(
+                chi_st_min=chi_st_min,
+                chi_st_max=chi_st_max,
+                n_points=n_extinction_points,
+                output_dir=output_dir,
+                write_FlameMaster=write_FlameMaster)
+        else:
+            extinct_data = []
         
         return ignited_data + extinct_data
 
@@ -662,6 +666,7 @@ class FlameletTableGenerator:
         
         self.logger.info('Beginning s-curve computation')
         error_count = 0
+        branch_id = 1
         for i in range(start_iteration, n_max):
             # Update flame width if we are attempting a new point
             if error_count == 0:
@@ -681,8 +686,9 @@ class FlameletTableGenerator:
             self.flame.left_control_point_temperature -= temperature_increment
             self.flame.right_control_point_temperature -= temperature_increment
             self.flame.clear_stats()
-            if (self.flame.left_control_point_temperature < self.flame.fuel_inlet.T + 100 or
-                self.flame.right_control_point_temperature < self.flame.oxidizer_inlet.T + 100):
+            T_threshold = 10.0
+            if (self.flame.left_control_point_temperature < self.flame.fuel_inlet.T + T_threshold or
+                self.flame.right_control_point_temperature < self.flame.oxidizer_inlet.T + T_threshold):
                 self.logger.info("SUCCESS! Control point temperature near inlet temperature.")
                 break
             
@@ -731,6 +737,8 @@ class FlameletTableGenerator:
             strain_rate_max = self.flame.strain_rate('max')
             strain_rate_nom = self._strain_rate_nominal()
             strain_rate_max_glob = max(strain_rate_max, strain_rate_max_glob)
+            if len(self.solutions) > 0 and chi_st < self.solutions[0]['metadata']['chi_st']:
+                branch_id += 1
             step_data = {
                 'T_max': T_max,
                 'T_st': T_st,
@@ -741,6 +749,7 @@ class FlameletTableGenerator:
                 'n_points': len(self.flame.grid),
                 'flame_width': width,
                 'Tc_increment': temperature_increment,
+                'branch_id': branch_id,
                 'time_steps': sum(self.flame.time_step_stats),
                 'eval_count': sum(self.flame.eval_count_stats),
                 'cpu_time': sum(self.flame.jacobian_time_stats + self.flame.eval_time_stats),
@@ -761,8 +770,8 @@ class FlameletTableGenerator:
             
             # Logging after successful solution
             self.logger.info(
-                f"Iteration {i} completed: T_max = {T_max:.2f}, T_st = {T_st:.2f}, "
-                f"chi_st = {chi_st:.4e}, strain_rate_max = {strain_rate_max:.2f}, "
+                f"Iteration {i} completed: T_max = {T_max:.2f}, "
+                f"chi_st = {chi_st:.4e}, "
                 f"strain_rate_nom = {strain_rate_nom:.2f}"
             )
 
@@ -772,6 +781,8 @@ class FlameletTableGenerator:
                 break
 
         self.logger.info(f'Stopped after {i} iterations')
+        self.logger.info(f'Solutions computed: {len(data)}')
+        self.logger.info(f'Turning points encountered: {branch_id - 1}')
         return data
 
     def compute_extinct_branch(
@@ -851,12 +862,12 @@ class FlameletTableGenerator:
             try:
                 self.flame.solve(loglevel=self.solver_loglevel)
             except:
-                self.logger.warning(f"Failed to compute solution at chi_st = {chi_st:.2e}")
+                self.logger.warning(f"Failed to compute solution at chi_st = {chi_st_i:.2e}")
                 continue
 
             if not self.flame.extinct():
                 T_max = np.max(self.flame.T)
-                self.logger.warning(f"Failed to compute solution at chi_st = {chi_st:.2e} (autoignited, T_max = {T_max:.2f})")
+                self.logger.warning(f"Failed to compute solution at chi_st = {chi_st_i:.2e} (autoignited, T_max = {T_max:.2f})")
                 continue
             
             # Compute postprocessing data
@@ -877,6 +888,7 @@ class FlameletTableGenerator:
                 'total_heat_release_rate': np.trapz(self.flame.heat_release_rate, self.flame.grid),
                 'n_points': len(self.flame.grid),
                 'flame_width': width,
+                'branch_id': 0,
                 'time_steps': sum(self.flame.time_step_stats),
                 'eval_count': sum(self.flame.eval_count_stats),
                 'cpu_time': sum(self.flame.jacobian_time_stats + self.flame.eval_time_stats),
@@ -896,8 +908,8 @@ class FlameletTableGenerator:
             
             # Logging after successful solution
             self.logger.info(
-                f"Iteration {i} completed: T_max = {T_max:.2f}, T_st = {T_st:.2f}, "
-                f"chi_st = {chi_st:.4e}, strain_rate_max = {strain_rate_max:.2f}, "
+                f"Iteration {i} completed: T_max = {T_max:.2f}, "
+                f"chi_st = {chi_st:.4e}, "
                 f"strain_rate_nom = {strain_rate_nom:.2f}"
             )
         
@@ -1052,7 +1064,9 @@ class FlameletTableGenerator:
         tf_str = f"tf{self.fuel_inlet.temperature:04.0f}"
         to_str = f"to{self.oxidizer_inlet.temperature:04.0f}"
         Tst_str = f"Tst{solution['metadata']['T_st']:04.0f}"
-        filename = output_dir / f"{fuel_name}_{pressure_str}{chi_str}{tf_str}{to_str}{Tst_str}"
+        flamemaster_dir = output_dir / "FlameMaster"
+        flamemaster_dir.mkdir(parents=True, exist_ok=True)
+        filename = flamemaster_dir / f"{fuel_name}_{pressure_str}{chi_str}{tf_str}{to_str}{Tst_str}"
 
         def write_array(f, name, data, n_cols=5):
             f.write(f"{name}\n")
