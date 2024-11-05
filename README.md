@@ -31,7 +31,7 @@ To install FPVgen, follow these steps:
 
 ## Basic Structure of an Input File
 
-The input file for FPVgen is a TOML configuration file. Below is an example of the structure of an input file:
+The input file for FPVgen uses TOML format. Below is an example of the structure of an input file:
 
 ```toml
 # input.toml
