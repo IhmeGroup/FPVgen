@@ -43,7 +43,7 @@ transport_model = "mixture-averaged"                     # Transport model: "uni
 prog_def = { CO = 1.0, H2 = 1.0, CO2 = 1.0, H2O = 1.0 }  # Progress variable definition
 
 [conditions]
-pressure = 101325.0      # Operating pressure in Pa
+pressure = 101325.0  # Operating pressure in Pa
 
 [fuel_inlet]
 composition = { CH4 = 1.0 }  # Pure methane
