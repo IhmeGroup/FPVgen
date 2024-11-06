@@ -7,7 +7,7 @@ name = "FPVgen"
 version = "0.1.0"
 description = "A software tool for generating flamelet tables for combustion simulations."
 authors = [
-    { name = "FX Laboratory"},
+    { name = "Laboratory of Fluids in Complex Environments"},
     { name = "Matthew Bonanni", email = "mbonanni001@gmail.com" }
 ]
 license = { text = "MIT" }
