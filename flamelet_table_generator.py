@@ -739,6 +739,7 @@ class FlameletTableGenerator:
             strain_rate_max_glob = max(strain_rate_max, strain_rate_max_glob)
             if len(self.solutions) > 0 and chi_st < self.solutions[0]['metadata']['chi_st']:
                 branch_id += 1
+                self.logger.info(f"Turning point encountered")
             step_data = {
                 'T_max': T_max,
                 'T_st': T_st,
@@ -936,8 +937,15 @@ class FlameletTableGenerator:
             with h5py.File(solutions_file, 'w') as f:
                 params = {
                     'mechanism_file': self.mechanism_file,
+                    'transport_model': self.transport_model,
                     'pressure': self.pressure,
-                    'width': self.width,
+                    'width_ratio': self.width_ratio,
+                    'width_change_enable': self.width_change_enable,
+                    'width_change_max': self.width_change_max,
+                    'width_change_min': self.width_change_min,
+                    'initial_chi_st': self.initial_chi_st,
+                    'solver_loglevel': self.solver_loglevel,
+                    'prog_def': self.prog_def,
                     'Z_st': float(self.Z_st),
                     'fuel_inlet': {
                         'composition': self.fuel_inlet.composition,
@@ -946,7 +954,8 @@ class FlameletTableGenerator:
                     'oxidizer_inlet': {
                         'composition': self.oxidizer_inlet.composition,
                         'temperature': self.oxidizer_inlet.temperature,
-                    }
+                    },
+                    'strain_chi_st_model_params': self.strain_chi_st_model_params,
                 }
                 f.attrs['parameters'] = json.dumps(params)
                 f.create_group('solutions_meta')
@@ -1023,10 +1032,22 @@ class FlameletTableGenerator:
             # Create generator instance
             generator = cls(
                 mechanism_file=params['mechanism_file'],
-                fuel_inlet=fuel_inlet,
-                oxidizer_inlet=oxidizer_inlet,
-                pressure=params['pressure']
+                transport_model=params['transport_model'],
+                fuel_inlet=InletCondition(**params['fuel_inlet']),
+                oxidizer_inlet=InletCondition(**params['oxidizer_inlet']),
+                pressure=params['pressure'],
+                prog_def=params['prog_def'],
+                width_ratio=params['width_ratio'],
+                width_change_enable=params['width_change_enable'],
+                width_change_max=params['width_change_max'],
+                width_change_min=params['width_change_min'],
+                initial_chi_st=params['initial_chi_st'],
+                solver_loglevel=params['solver_loglevel']
             )
+
+            # Set additional attributes
+            generator.Z_st = params['Z_st']
+            generator.strain_chi_st_model_params = params.get('strain_chi_st_model_params')
             
             # Load solutions
             generator.solutions = []
@@ -1160,6 +1181,208 @@ class FlameletTableGenerator:
         include_species_mass_fractions: List[str] = [],
         include_species_production_rates: List[str] = []
     ):
+        """Assemble a Flamelet Progress Variable (FPV) table and write it in CharlesX format.
+
+        Args:
+            output_dir: Directory path to save the CharlesX table files
+            dims: Tuple of (Z, Q, L) dimensions for the table
+            force_monotonicity: Whether to force monotonicity in the table
+            igniting_table: Whether to assemble an igniting table
+            include_species_mass_fractions: List of species for which to include mass fractions
+            include_species_production_rates: List of species for which to include production rates
+        """
+        # Build filename
+        fuel_str = "".join([key for key in self.fuel_inlet.composition.keys()])
+        oxidizer_str = "".join([key for key in self.oxidizer_inlet.composition.keys()])
+        pressure_str = f"p{(self.pressure/1e5):04.1f}".replace('.', '_')
+        tf_str = f"tf{self.fuel_inlet.temperature:04.0f}"
+        to_str = f"to{self.oxidizer_inlet.temperature:04.0f}"
+        dim_str = f"{dims[0]}x{dims[1]}x{dims[2]}"
+        filename = output_dir / f"{fuel_str}_{oxidizer_str}_{pressure_str}_{tf_str}_{to_str}_{dim_str}.h5"
+
+        # Create the dimensions
+        Z = np.linspace(0, 1, dims[0]) # TODO: linear then stretched spacing
+        Q = np.linspace(0, 1, dims[1])
+        L = np.linspace(0, 1, dims[2])
+
+        # Create the data arrays
+        vars = ["ROM", "T0", "E0", "GAMMA0", "AGAMMA", "MU0", "AMU", "LOC0", "ALOC",
+                "SRC_PROG", "PROG", "HeatRelease", "rho0"]
+        vars += include_species_mass_fractions
+        vars += ["ZBilger"]
+        vars += ["SRC_" + sp for sp in include_species_production_rates]
+        data_interp_Z = {var: np.zeros((dims[0], len(self.solutions))) for var in vars}
+
+        def build_interp(Z, data):
+            return interpolate.interp1d(Z, data, axis=0, bounds_error=False,
+                                        fill_value=(data[0], data[-1]))
+
+        # Compute the data arrays
+        for i, sol in enumerate(self.solutions):
+            self.logger.info(f"Processing flamelet {i+1}/{len(self.solutions)}...")
+            self.flame.from_array(sol['state'])
+
+            # ZBilger [-]
+            Z_i = self.flame.mixture_fraction("Bilger")
+            data_interp_Z["ZBilger"][:, i] = Z
+
+            # ROM [J/kg/K]
+            ROM_i = ct.gas_constant / self.flame.mean_molecular_weight
+            interp = build_interp(Z_i, ROM_i)
+            data_interp_Z["ROM"][:, i] = interp(Z)
+
+            # T0 [K]
+            T0_i = self.flame.T
+            interp = build_interp(Z_i, T0_i)
+            data_interp_Z["T0"][:, i] = interp(Z)
+
+            # rho0 [kg/m^3]
+            rho0_i = self.flame.density
+            interp = build_interp(Z_i, rho0_i)
+            data_interp_Z["rho0"][:, i] = interp(Z)
+
+            # E0 [J/kg]
+            E0_i = self.flame.int_energy_mass
+            interp = build_interp(Z_i, E0_i)
+            data_interp_Z["E0"][:, i] = interp(Z)
+
+            # Compute derivatives via perturbation
+            rho0deltaE = 5000.0
+            deltaE = rho0deltaE / self.flame.density
+            E0_p = E0_i + deltaE
+            E0_m = E0_i - deltaE
+            T0_p = np.zeros_like(T0_i)
+            T0_m = np.zeros_like(T0_i)
+            MU0_p = np.zeros_like(T0_i)
+            MU0_m = np.zeros_like(T0_i)
+            LOC0_p = np.zeros_like(T0_i)
+            LOC0_m = np.zeros_like(T0_i)
+            for j in range(len(self.flame.grid)):
+                # Positive perturbation
+                self.gas.TPY = self.flame.T[j], self.flame.P, self.flame.Y[:, j]
+                self.gas.UV = E0_p[j], self.gas.v
+                T0_p[j] = self.gas.T
+                MU0_p[j] = self.gas.viscosity
+                LOC0_p[j] = self.gas.thermal_conductivity / (self.gas.cp_mass * self.gas.density)
+
+                # Negative perturbation
+                self.gas.TPY = self.flame.T[j], self.flame.P, self.flame.Y[:, j]
+                self.gas.UV = E0_m[j], self.gas.v
+                T0_m[j] = self.gas.T
+                MU0_m[j] = self.gas.viscosity
+                LOC0_m[j] = self.gas.thermal_conductivity / (self.gas.cp_mass * self.gas.density)
+            # Energy derivatives
+            dTm = T0_i - T0_m
+            dTp = T0_p - T0_i
+            dT = T0_p - T0_m
+            dedT = (dTm * dTm * (E0_i + deltaE) + (dTp - dTm) * dT * E0_i
+                    - dTp * dTp * (E0_i - deltaE)) / (dTp * dTm * dT)
+            d2edT2 = 2.0 * (dTm * (E0_i + deltaE) - dT * E0_i
+                     + dTp * (E0_i - deltaE)) / (dTp * dTm * dT)
+            
+            # GAMMA0 (specific gas constant) [-]
+            GAMMA0_i = ROM_i / dedT + 1.0
+            interp = build_interp(Z_i, GAMMA0_i)
+            data_interp_Z["GAMMA0"][:, i] = interp(Z)
+
+            # AGAMMA
+            AGAMMA_i = -d2edT2 * (GAMMA0_i - 1.0)**2 / ROM_i
+            interp = build_interp(Z_i, AGAMMA_i)
+            data_interp_Z["AGAMMA"][:, i] = interp(Z)
+
+            # MU0 (viscosity) [kg/m/s] ?
+            MU0_i = self.flame.viscosity
+            interp = build_interp(Z_i, MU0_i)
+            data_interp_Z["MU0"][:, i] = interp(Z)
+
+            # AMU
+            AMU_i = np.log(MU0_p / MU0_m) / np.log(T0_p / T0_m)
+            interp = build_interp(Z_i, AMU_i)
+            data_interp_Z["AMU"][:, i] = interp(Z)
+
+            # LOC0 (lambda / (cp * rho)) [m^2/s]
+            LOC0_i = self.flame.thermal_conductivity / (self.flame.cp_mass * self.flame.density)
+            interp = build_interp(Z_i, LOC0_i)
+            data_interp_Z["LOC0"][:, i] = interp(Z)
+
+            # ALOC
+            ALOC_i = np.log(LOC0_p / LOC0_m) / np.log(T0_p / T0_m)
+            interp = build_interp(Z_i, ALOC_i)
+            data_interp_Z["ALOC"][:, i] = interp(Z)
+
+            # SRC_PROG [1/s]
+            SRC_PROG_i = self._compute_progress_variable_production()
+            interp = build_interp(Z_i, SRC_PROG_i)
+            data_interp_Z["SRC_PROG"][:, i] = interp(Z)
+
+            # PROG [-]
+            C_i = self._compute_progress_variable()
+            interp = build_interp(Z_i, C_i)
+            data_interp_Z["PROG"][:, i] = interp(Z)
+
+            # HeatRelease [W/kg]
+            HeatRelease_i = self.flame.heat_release_rate / self.flame.density
+            interp = build_interp(Z_i, HeatRelease_i)
+            data_interp_Z["HeatRelease"][:, i] = interp(Z)
+
+            # Species mass fractions [-]
+            for sp in include_species_mass_fractions:
+                Y_i = self.flame.Y[self.gas.species_index(sp), :]
+                interp = build_interp(Z_i, Y_i)
+                data_interp_Z[sp][:, i] = interp(Z)
+            
+            # Species production rates [kmol/m^3/s] ?
+            for sp in include_species_production_rates:
+                SRC_i = self.flame.net_production_rates[self.gas.species_index(sp), :]
+                interp = build_interp(Z_i, SRC_i)
+                data_interp_Z["SRC_" + sp][:, i] = interp(Z)
+
+        # Compute the normalized progress variable [-]
+        C_arr = data_interp_Z["PROG"]
+        C_min = np.min(C_arr, axis=1)
+        C_max = np.max(C_arr, axis=1)
+        data_interp_Z["PROG_NORM"] = (C_arr - C_min[:, np.newaxis]) / (C_max - C_min)[:, np.newaxis]
+
+        # Interpolate the data along the normalized progress variable
+        data_table = {var: np.zeros((dims[0], dims[1], dims[2])) for var in vars}
+        for var in vars:
+            for i in range(dims[0]):
+                interp = interpolate.interp1d(data_interp_Z["PROG_NORM"][i, :],
+                                              data_interp_Z[var][i, :],
+                                              axis=0, bounds_error=False, fill_value="extrapolate")
+                data_table_i = interp(L)
+                data_table_i = np.tile(data_table_i, (dims[1], 1)).T # Expand to cover Q dimension
+                data_table[var][i, :, :] = data_table_i
+        
+        # Write the table to the HDF5 file in CharlesX format
+        with h5py.File(filename, 'w') as f:
+            # Header group
+            header = f.create_group('Header')
+            doubles = header.create_group('Doubles')
+            double_0 = doubles.create_dataset('Double_0', data=['Reference Pressure'])
+            double_0.attrs['Value'] = self.pressure
+            double_1 = doubles.create_dataset('Double_1', data=['Version'])
+            double_1.attrs['Value'] = 0.2
+            header.create_dataset('Number of dimensions', data=3)
+            header.create_dataset('Number of variables', data=len(vars))
+            strings = header.create_group('Strings')
+            strings.create_dataset('String_0', data=['Combustion Model', 'FPVA'])
+            strings.create_dataset('String_1', data=['Table Type', 'COEFF'])
+            header.create_dataset('Variable Names', data=vars)
+
+            # Data dataset
+            n_tot = dims[0] * dims[1] * dims[2] * len(vars)
+            data_raw = np.empty((n_tot))
+            for i, var in enumerate(vars):
+                data_raw[i::len(vars)] = data_table[var].ravel(order='C')
+            f.create_dataset('Data', data=data_raw)
+
+            # Coordinates group
+            coords = f.create_group('Coordinates')
+            coords.create_dataset('Coor_0', data=Z)
+            coords.create_dataset('Coor_1', data=Q)
+            coords.create_dataset('Coor_2', data=L)
+
         raise NotImplementedError("CharlesX FPV table assembly is not yet implemented")
     
     def learn_strain_chi_st_mapping(self, output_file: Optional[str] = None):

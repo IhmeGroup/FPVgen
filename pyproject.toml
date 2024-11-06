@@ -18,5 +18,5 @@ dependencies = [
     "pandas",
     "h5py",
     "tomli",
-    "cantera @ git+https://github.com/Cantera/cantera.git@main"
+    "cantera>=3.1.0a4"
 ]
