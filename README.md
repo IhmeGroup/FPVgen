@@ -20,7 +20,7 @@ To install FPVgen, follow these steps:
     source fpvgen/bin/activate  # On Windows use `fpvgen\Scripts\activate`
 
     # Using conda
-    conda create --name fpvgen
+    conda create --name fpvgen python==3.12 pip
     conda activate fpvgen
     ```
 
