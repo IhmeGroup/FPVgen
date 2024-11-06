@@ -44,7 +44,6 @@ prog_def = { CO = 1.0, H2 = 1.0, CO2 = 1.0, H2O = 1.0 }  # Progress variable def
 
 [conditions]
 pressure = 101325.0      # Operating pressure in Pa
-initial_chi_st = 1.0e-4  # Initial target scalar dissipation rate
 
 [fuel_inlet]
 composition = { CH4 = 1.0 }  # Pure methane
