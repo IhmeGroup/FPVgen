@@ -1,4 +1,3 @@
-from dataclasses import dataclass
 from enum import Enum
 import numpy as np
 import h5py
@@ -128,9 +127,7 @@ class CoordinatePowerLaw(Coordinate):
         growth_rate (float): The growth rate of the power-law.
     """
 
-    def __init__(
-        self, name: str, lower_bound: float, upper_bound: float, size: int, growth_rate: float
-    ):
+    def __init__(self, name: str, lower_bound: float, upper_bound: float, size: int, growth_rate: float):
         """Initialize the CoordinatePowerLaw class.
 
         Args:
@@ -143,9 +140,7 @@ class CoordinatePowerLaw(Coordinate):
         self.type = CoordType.POWER_LAW
         self.growth_rate = growth_rate
         self.grid = (
-            np.linspace(
-                lower_bound ** (1 / self.growth_rate), upper_bound ** (1 / self.growth_rate), size
-            )
+            np.linspace(lower_bound ** (1 / self.growth_rate), upper_bound ** (1 / self.growth_rate), size)
             ** self.growth_rate
         )
 
@@ -194,9 +189,7 @@ class CoordinateTwoLinear(Coordinate):
         self.middle = middle
         self.size1 = size1
         self.size2 = size2
-        self.grid = np.concatenate(
-            (np.linspace(lower_bound, middle, size1), np.linspace(middle, upper_bound, size2))
-        )
+        self.grid = np.concatenate((np.linspace(lower_bound, middle, size1), np.linspace(middle, upper_bound, size2)))
 
     def write_hdf5(self, group: h5py.Group, dataset_name: str):
         """Write the coordinate data to an HDF5 group, including the middle value and segment sizes.

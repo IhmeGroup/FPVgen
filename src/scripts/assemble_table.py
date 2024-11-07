@@ -21,9 +21,7 @@ def main():
         description="Assemble FPV table from precomputed solutions",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    parser.add_argument(
-        "solutions_file", type=Path, help="Path to HDF5 file containing precomputed solutions"
-    )
+    parser.add_argument("solutions_file", type=Path, help="Path to HDF5 file containing precomputed solutions")
     parser.add_argument(
         "output_dir",
         type=Path,
