@@ -12,6 +12,8 @@ import cantera as ct
 from scipy import interpolate
 from scipy.special import erfcinv
 
+import coordinate
+
 pyplot_params = {
     "text.usetex": True,
     "font.family": "serif",
@@ -70,7 +72,7 @@ class FlameletTableGenerator:
         width_change_enable: Optional[bool] = False,
         width_change_max: Optional[float] = 0.2,
         width_change_min: Optional[float] = 0.05,
-        initial_chi_st: Optional[float] = 1.0e-2,
+        initial_chi_st: Optional[float] = 1.0e-3,
         solver_loglevel: Optional[int] = 0,
         strain_chi_st_model_param_file: Optional[str] = None
     ):
@@ -1201,9 +1203,10 @@ class FlameletTableGenerator:
         filename = output_dir / f"{fuel_str}_{oxidizer_str}_{pressure_str}_{tf_str}_{to_str}_{dim_str}.h5"
 
         # Create the dimensions
-        Z = np.linspace(0, 1, dims[0]) # TODO: linear then stretched spacing
-        Q = np.linspace(0, 1, dims[1])
-        L = np.linspace(0, 1, dims[2])
+        i_cut = dims[0] // 3
+        Z = coordinate.CoordinateLinearThenStretched("Z", 0, self.Z_st, 1, i_cut, dims[0] - i_cut)
+        Q = coordinate.CoordinatePowerLaw("Sz", 0, 1, dims[1], 2.7)
+        L = coordinate.CoordinateLinear("C", 0, 1, dims[2])
 
         # Create the data arrays
         vars = ["ROM", "T0", "E0", "GAMMA0", "AGAMMA", "MU0", "AMU", "LOC0", "ALOC",
@@ -1224,27 +1227,27 @@ class FlameletTableGenerator:
 
             # ZBilger [-]
             Z_i = self.flame.mixture_fraction("Bilger")
-            data_interp_Z["ZBilger"][:, i] = Z
+            data_interp_Z["ZBilger"][:, i] = Z.grid
 
             # ROM [J/kg/K]
             ROM_i = ct.gas_constant / self.flame.mean_molecular_weight
             interp = build_interp(Z_i, ROM_i)
-            data_interp_Z["ROM"][:, i] = interp(Z)
+            data_interp_Z["ROM"][:, i] = interp(Z.grid)
 
             # T0 [K]
             T0_i = self.flame.T
             interp = build_interp(Z_i, T0_i)
-            data_interp_Z["T0"][:, i] = interp(Z)
+            data_interp_Z["T0"][:, i] = interp(Z.grid)
 
             # rho0 [kg/m^3]
             rho0_i = self.flame.density
             interp = build_interp(Z_i, rho0_i)
-            data_interp_Z["rho0"][:, i] = interp(Z)
+            data_interp_Z["rho0"][:, i] = interp(Z.grid)
 
             # E0 [J/kg]
             E0_i = self.flame.int_energy_mass
             interp = build_interp(Z_i, E0_i)
-            data_interp_Z["E0"][:, i] = interp(Z)
+            data_interp_Z["E0"][:, i] = interp(Z.grid)
 
             # Compute derivatives via perturbation
             rho0deltaE = 5000.0
@@ -1283,59 +1286,59 @@ class FlameletTableGenerator:
             # GAMMA0 (specific gas constant) [-]
             GAMMA0_i = ROM_i / dedT + 1.0
             interp = build_interp(Z_i, GAMMA0_i)
-            data_interp_Z["GAMMA0"][:, i] = interp(Z)
+            data_interp_Z["GAMMA0"][:, i] = interp(Z.grid)
 
             # AGAMMA
             AGAMMA_i = -d2edT2 * (GAMMA0_i - 1.0)**2 / ROM_i
             interp = build_interp(Z_i, AGAMMA_i)
-            data_interp_Z["AGAMMA"][:, i] = interp(Z)
+            data_interp_Z["AGAMMA"][:, i] = interp(Z.grid)
 
             # MU0 (viscosity) [kg/m/s] ?
             MU0_i = self.flame.viscosity
             interp = build_interp(Z_i, MU0_i)
-            data_interp_Z["MU0"][:, i] = interp(Z)
+            data_interp_Z["MU0"][:, i] = interp(Z.grid)
 
             # AMU
             AMU_i = np.log(MU0_p / MU0_m) / np.log(T0_p / T0_m)
             interp = build_interp(Z_i, AMU_i)
-            data_interp_Z["AMU"][:, i] = interp(Z)
+            data_interp_Z["AMU"][:, i] = interp(Z.grid)
 
             # LOC0 (lambda / (cp * rho)) [m^2/s]
             LOC0_i = self.flame.thermal_conductivity / (self.flame.cp_mass * self.flame.density)
             interp = build_interp(Z_i, LOC0_i)
-            data_interp_Z["LOC0"][:, i] = interp(Z)
+            data_interp_Z["LOC0"][:, i] = interp(Z.grid)
 
             # ALOC
             ALOC_i = np.log(LOC0_p / LOC0_m) / np.log(T0_p / T0_m)
             interp = build_interp(Z_i, ALOC_i)
-            data_interp_Z["ALOC"][:, i] = interp(Z)
+            data_interp_Z["ALOC"][:, i] = interp(Z.grid)
 
             # SRC_PROG [1/s]
             SRC_PROG_i = self._compute_progress_variable_production()
             interp = build_interp(Z_i, SRC_PROG_i)
-            data_interp_Z["SRC_PROG"][:, i] = interp(Z)
+            data_interp_Z["SRC_PROG"][:, i] = interp(Z.grid)
 
             # PROG [-]
             C_i = self._compute_progress_variable()
             interp = build_interp(Z_i, C_i)
-            data_interp_Z["PROG"][:, i] = interp(Z)
+            data_interp_Z["PROG"][:, i] = interp(Z.grid)
 
             # HeatRelease [W/kg]
             HeatRelease_i = self.flame.heat_release_rate / self.flame.density
             interp = build_interp(Z_i, HeatRelease_i)
-            data_interp_Z["HeatRelease"][:, i] = interp(Z)
+            data_interp_Z["HeatRelease"][:, i] = interp(Z.grid)
 
             # Species mass fractions [-]
             for sp in include_species_mass_fractions:
                 Y_i = self.flame.Y[self.gas.species_index(sp), :]
                 interp = build_interp(Z_i, Y_i)
-                data_interp_Z[sp][:, i] = interp(Z)
+                data_interp_Z[sp][:, i] = interp(Z.grid)
             
             # Species production rates [kmol/m^3/s] ?
             for sp in include_species_production_rates:
                 SRC_i = self.flame.net_production_rates[self.gas.species_index(sp), :]
                 interp = build_interp(Z_i, SRC_i)
-                data_interp_Z["SRC_" + sp][:, i] = interp(Z)
+                data_interp_Z["SRC_" + sp][:, i] = interp(Z.grid)
 
         # Compute the normalized progress variable [-]
         C_arr = data_interp_Z["PROG"]
@@ -1350,8 +1353,8 @@ class FlameletTableGenerator:
                 interp = interpolate.interp1d(data_interp_Z["PROG_NORM"][i, :],
                                               data_interp_Z[var][i, :],
                                               axis=0, bounds_error=False, fill_value="extrapolate")
-                data_table_i = interp(L)
-                data_table_i = np.tile(data_table_i, (dims[1], 1)).T # Expand to cover Q dimension
+                data_table_i = interp(L.grid)
+                data_table_i = np.tile(data_table_i, (dims[1], 1)) # Expand to cover Q dimension
                 data_table[var][i, :, :] = data_table_i
         
         # Write the table to the HDF5 file in CharlesX format
@@ -1379,11 +1382,9 @@ class FlameletTableGenerator:
 
             # Coordinates group
             coords = f.create_group('Coordinates')
-            coords.create_dataset('Coor_0', data=Z)
-            coords.create_dataset('Coor_1', data=Q)
-            coords.create_dataset('Coor_2', data=L)
-
-        raise NotImplementedError("CharlesX FPV table assembly is not yet implemented")
+            Z.write_hdf5(coords, 'Coor_0')
+            Q.write_hdf5(coords, 'Coor_1')
+            L.write_hdf5(coords, 'Coor_2')
     
     def learn_strain_chi_st_mapping(self, output_file: Optional[str] = None):
         """Learn a mapping between strain rate and scalar dissipation rate at stoichiometry.
