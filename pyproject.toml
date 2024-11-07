@@ -29,6 +29,10 @@ dependencies = [
     "cantera >=3.1.0a4"
 ]
 
+[project.urls]
+Homepage = "https://github.com/IhmeGroup/FPVgen"
+Issues = "https://github.com/IhmeGroup/FPVgen/issues"
+
 [tool.setuptools]
 package-dir = {"" = "src"}
 
