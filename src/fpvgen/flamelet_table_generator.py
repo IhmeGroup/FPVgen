@@ -2,7 +2,7 @@ import logging
 import datetime
 from pathlib import Path
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Tuple, Literal
+from typing import Dict, List, Union, Optional, Tuple, Literal
 import h5py
 import json
 import numpy as np
@@ -1164,8 +1164,8 @@ class FlameletTableGenerator:
         dims: Tuple[int, int, int] = (100, 2, 100),
         force_monotonicity: bool = False,
         igniting_table: bool = False,
-        include_species_mass_fractions: List[str] = [],
-        include_species_production_rates: List[str] = [],
+        include_species_mass_fractions: Union[str, List[str]] = [],
+        include_species_production_rates: Union[str, List[str]] = [],
     ):
         """Assemble a Flamelet Progress Variable (FPV) table and write it in CharlesX format.
 
@@ -1177,6 +1177,9 @@ class FlameletTableGenerator:
             include_species_mass_fractions: List of species for which to include mass fractions
             include_species_production_rates: List of species for which to include production rates
         """
+        if force_monotonicity:
+            raise NotImplementedError("Monotonicity enforcement is not yet implemented")
+
         # Build filename
         fuel_str = "".join([key for key in self.fuel_inlet.composition.keys()])
         oxidizer_str = "".join([key for key in self.oxidizer_inlet.composition.keys()])
@@ -1191,6 +1194,12 @@ class FlameletTableGenerator:
         Z = coordinate.CoordinateLinearThenStretched("Z", 0, self.Z_st, 1, i_cut, dims[0] - i_cut)
         Q = coordinate.CoordinatePowerLaw("Sz", 0, 1, dims[1], 2.7)
         L = coordinate.CoordinateLinear("C", 0, 1, dims[2])
+
+        # Handle species and production rates
+        if include_species_mass_fractions == "all":
+            include_species_mass_fractions = self.gas.species_names
+        if include_species_production_rates == "all":
+            include_species_production_rates = self.gas.species_names
 
         # Create the data arrays
         vars = [
@@ -1208,8 +1217,8 @@ class FlameletTableGenerator:
             "HeatRelease",
             "rho0",
         ]
-        vars += include_species_mass_fractions
         vars += ["ZBilger"]
+        vars += include_species_mass_fractions
         vars += ["SRC_" + sp for sp in include_species_production_rates]
         data_interp_Z = {var: np.zeros((dims[0], len(self.solutions))) for var in vars}
 
@@ -1343,8 +1352,9 @@ class FlameletTableGenerator:
         data_interp_Z["PROG_NORM"] = (C_arr - C_min[:, np.newaxis]) / (C_max - C_min)[:, np.newaxis]
 
         # Interpolate the data along the normalized progress variable
-        data_table = {var: np.zeros((dims[0], dims[1], dims[2])) for var in vars}
-        for var in vars:
+        vars_interp = vars + ["PROG_NORM"]
+        data_table = {var: np.zeros((dims[0], dims[1], dims[2])) for var in vars_interp}
+        for var in vars_interp:
             for i in range(dims[0]):
                 interp = interpolate.interp1d(
                     data_interp_Z["PROG_NORM"][i, :],
@@ -1356,6 +1366,12 @@ class FlameletTableGenerator:
                 data_table_i = interp(L.grid)
                 data_table_i = np.tile(data_table_i, (dims[1], 1))  # Expand to cover Q dimension
                 data_table[var][i, :, :] = data_table_i
+        
+        # Handle ignition
+        threshold = 1e-8
+        data_table["SRC_PROG"][data_table["PROG_NORM"] > 1.0 - threshold] = 0.0
+        if not igniting_table:
+            data_table["SRC_PROG"][data_table["PROG_NORM"] < threshold] = 0.0
 
         # Write the table to the HDF5 file in CharlesX format
         with h5py.File(filename, "w") as f:
@@ -1363,11 +1379,11 @@ class FlameletTableGenerator:
             header = f.create_group("Header")
             doubles = header.create_group("Doubles")
             double_0 = doubles.create_dataset("Double_0", data=["Reference Pressure"])
-            double_0.attrs["Value"] = self.pressure
+            double_0.attrs["Value"] = [self.pressure]
             double_1 = doubles.create_dataset("Double_1", data=["Version"])
-            double_1.attrs["Value"] = 0.2
-            header.create_dataset("Number of dimensions", data=3)
-            header.create_dataset("Number of variables", data=len(vars))
+            double_1.attrs["Value"] = [0.2]
+            header.create_dataset("Number of dimensions", data=[3])
+            header.create_dataset("Number of variables", data=[len(vars)])
             strings = header.create_group("Strings")
             strings.create_dataset("String_0", data=["Combustion Model", "FPVA"])
             strings.create_dataset("String_1", data=["Table Type", "COEFF"])

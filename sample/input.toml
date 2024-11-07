@@ -42,13 +42,12 @@ write_FlameMaster = true         # Write each solution in FlameMaster format
 loglevel = 0                     # Log level for the Cantera solver
 
 [tabulation]
-dimensions = [200, 2, 200]                # Number of points in each dimension: [Z, Zvar, L]
+dims = [200, 2, 200]                      # Number of points in each dimension: [Z, Zvar, L]
 force_monotonicity = true                 # Force monotonicity in the flamelet table
 igniting_table = false                    # Whether to create an igniting table
 include_species_mass_fractions = "all"    # Species mass fractions to include in the table: "all" or list of species
 include_species_production_rates = "all"  # Species production rates to include in the table: "all" or list of species
 
-# Plotting options
 [plotting.s_curve]
 x_quantity = "chi_st" # x-axis quantity: "strain_rate" or "chi_st"
 y_quantity = "T_max"  # y-axis quantity: "T_max" or "T_st"

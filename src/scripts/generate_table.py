@@ -211,7 +211,8 @@ def main():
         # Assemble the FPV table
         logger.info("Assembling the FPV table")
         generator.assemble_FPV_table_CharlesX(
-            output_dir=output_dir
+            output_dir=output_dir,
+            **config.get("tabulation", {})
         )
 
         # Create plots if requested
