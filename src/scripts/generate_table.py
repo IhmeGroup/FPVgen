@@ -210,10 +210,7 @@ def main():
 
         # Assemble the FPV table
         logger.info("Assembling the FPV table")
-        generator.assemble_FPV_table_CharlesX(
-            output_dir=output_dir,
-            **config.get("tabulation", {})
-        )
+        generator.assemble_FPV_table_CharlesX(output_dir=output_dir, **config.get("tabulation", {}))
 
         # Create plots if requested
         if create_plots:
@@ -228,6 +225,10 @@ def main():
             )
             generator.plot_strain_chi_st(strain_rate_type="max", output_file=output_dir / "strain_max_chi_st.png")
             generator.plot_strain_chi_st(strain_rate_type="nom", output_file=output_dir / "strain_nom_chi_st.png")
+            generator.plot_table(
+                output_prefix=output_dir / "table",
+                **config.get("plotting", {}).get("table", {}),
+            )
 
         logger.info("Flamelet generation completed successfully")
         return 0

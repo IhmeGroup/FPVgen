@@ -1194,6 +1194,7 @@ class FlameletTableGenerator:
         Z = coordinate.CoordinateLinearThenStretched("Z", 0, self.Z_st, 1, i_cut, dims[0] - i_cut)
         Q = coordinate.CoordinatePowerLaw("Sz", 0, 1, dims[1], 2.7)
         L = coordinate.CoordinateLinear("C", 0, 1, dims[2])
+        self.table_coords = [Z, Q, L]
 
         # Handle species and production rates
         if include_species_mass_fractions == "all":
@@ -1353,7 +1354,7 @@ class FlameletTableGenerator:
 
         # Interpolate the data along the normalized progress variable
         vars_interp = vars + ["PROG_NORM"]
-        data_table = {var: np.zeros((dims[0], dims[1], dims[2])) for var in vars_interp}
+        self.data_table = {var: np.zeros((dims[0], dims[1], dims[2])) for var in vars_interp}
         for var in vars_interp:
             for i in range(dims[0]):
                 interp = interpolate.interp1d(
@@ -1365,13 +1366,13 @@ class FlameletTableGenerator:
                 )
                 data_table_i = interp(L.grid)
                 data_table_i = np.tile(data_table_i, (dims[1], 1))  # Expand to cover Q dimension
-                data_table[var][i, :, :] = data_table_i
-        
+                self.data_table[var][i, :, :] = data_table_i
+
         # Handle ignition
         threshold = 1e-8
-        data_table["SRC_PROG"][data_table["PROG_NORM"] > 1.0 - threshold] = 0.0
+        self.data_table["SRC_PROG"][self.data_table["PROG_NORM"] > 1.0 - threshold] = 0.0
         if not igniting_table:
-            data_table["SRC_PROG"][data_table["PROG_NORM"] < threshold] = 0.0
+            self.data_table["SRC_PROG"][self.data_table["PROG_NORM"] < threshold] = 0.0
 
         # Write the table to the HDF5 file in CharlesX format
         with h5py.File(filename, "w") as f:
@@ -1393,7 +1394,7 @@ class FlameletTableGenerator:
             n_tot = dims[0] * dims[1] * dims[2] * len(vars)
             data_raw = np.empty((n_tot))
             for i, var in enumerate(vars):
-                data_raw[i :: len(vars)] = data_table[var].ravel(order="C")
+                data_raw[i :: len(vars)] = self.data_table[var].ravel(order="C")
             f.create_dataset("Data", data=data_raw)
 
             # Coordinates group
@@ -1619,3 +1620,55 @@ class FlameletTableGenerator:
             fig.savefig(output_file, bbox_inches="tight", dpi=300)
 
         return fig, ax
+
+    def plot_table(
+        self,
+        output_prefix: str,
+        vars: List[str],
+        Q_plot: float = 0.0,
+        colormap: str = "viridis",
+    ):
+        """Plot a variable from the FPV table.
+
+        Args:
+            output_prefix: Prefix for the output files
+            vars: List of variables to plot
+            Q_plot: Value of mixture fraction variance slice to plot
+            colormap: Name of colormap to use for the plots
+        """
+        import matplotlib.pyplot as plt
+        from scipy.interpolate import RegularGridInterpolator
+
+        plt.rcParams.update(pyplot_params)
+
+        for var in vars:
+            if Q_plot == 0.0:
+                plot_data = self.data_table[var][:, 0, :].T
+            elif Q_plot == 1.0:
+                plot_data = self.data_table[var][:, -1, :].T
+            else:
+                interpolator = RegularGridInterpolator(
+                    [self.table_coords[i].grid for i in range(len(self.table_coords))],
+                    self.data_table[var][:, :, :].T,
+                    bounds_error=False,
+                    fill_value=None,
+                )
+                Z_plot, L_plot = np.meshgrid(self.table_coords[0].grid, self.table_coords[2].grid, indexing="ij")
+                Q_plot = np.full_like(Z_plot, Q_plot)
+                interp_grid = np.array([Z_plot.ravel(), Q_plot.ravel(), L_plot.ravel()]).T
+                plot_data = interpolator(interp_grid).reshape(Z_plot.shape)
+
+            fig, ax = plt.subplots()
+            ax.set_title(var)
+            ax.set_xlabel(r"$Z$ [-]")
+            ax.set_ylabel(r"$\Lambda$ [-]")
+            ax.set_aspect("equal")
+            c = ax.contourf(
+                self.table_coords[0].grid,
+                self.table_coords[2].grid,
+                plot_data,
+                levels=100,
+                cmap=colormap,
+            )
+            fig.colorbar(c, ax=ax)
+            fig.savefig(f"{output_prefix}_{var}.png", bbox_inches="tight", dpi=300)

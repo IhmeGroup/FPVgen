@@ -55,3 +55,7 @@ y_quantity = "T_max"  # y-axis quantity: "T_max" or "T_st"
 [plotting.profiles]
 # num_profiles = 10     # Number of profiles to plot
 colormap = "viridis"  # Colormap for temperature profiles
+
+[plotting.table]
+vars = ["T0", "SRC_PROG"]  # Variables to plot
+colormap = "viridis"      # Colormap for table plots
