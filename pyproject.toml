@@ -11,6 +11,13 @@ authors = [
     { name = "Matthew Bonanni", email = "mbonanni001@gmail.com" }
 ]
 license = { text = "MIT" }
+readme = "README.md"
+keywords = ["fpv", "flamelet", "automation"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+]
 requires-python = ">=3.8,<3.13"
 dependencies = [
     "numpy",
@@ -19,5 +26,35 @@ dependencies = [
     "pandas",
     "h5py",
     "tomli",
-    "cantera>=3.1.0a4"
+    "cantera >=3.1.0a4"
 ]
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.dynamic]
+version = { attr = "fpvgen.__version__" }
+
+[project.scripts]
+generate_table = "scripts.generate_table:main"
+assemble_table = "scripts.assemble_table:main"
+plot_flamelets = "scripts.plot_flamelets:main"
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "black",
+    "flake8",
+]
+
+[tool.pytest.ini_options]
+minversion = "6.0"
+addopts = "-v --tb=short"
+testpaths = ["tests"]
+
+[tool.black]
+line-length = 100
+target-version = ["py312"]

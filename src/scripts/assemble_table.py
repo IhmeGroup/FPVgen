@@ -1,7 +1,8 @@
 import argparse
 import logging
 from pathlib import Path
-from flamelet_table_generator import FlameletTableGenerator
+
+from fpvgen.flamelet_table_generator import FlameletTableGenerator
 
 def main():
     """Main entry point for assembling the FPV table.

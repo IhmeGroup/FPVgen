@@ -12,7 +12,7 @@ import cantera as ct
 from scipy import interpolate
 from scipy.special import erfcinv
 
-import coordinate
+from fpvgen import coordinate
 
 pyplot_params = {
     "text.usetex": True,

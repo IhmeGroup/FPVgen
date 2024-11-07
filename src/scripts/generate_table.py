@@ -50,7 +50,7 @@ import sys
 from pathlib import Path
 import tomli
 
-from flamelet_table_generator import FlameletTableGenerator, InletCondition
+from fpvgen.flamelet_table_generator import FlameletTableGenerator, InletCondition
 
 def load_config(config_file: Path) -> dict:
     """Load and validate TOML configuration file.

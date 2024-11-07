@@ -63,7 +63,7 @@ A comprehensive input file with all available options may be found at [sample/in
 To run the full process, including computation of flamelets, plotting of results, and assembly of the table, run the following command:
 
 ```sh
-python generate_table.py <input> [--verbose]
+generate_table <input> [--verbose]
 ```
 
 - `<input>`: Path to the TOML input file.
@@ -74,7 +74,7 @@ python generate_table.py <input> [--verbose]
 To plot flamelet solutions from an HDF5 file, run the following command:
 
 ```sh
-python plot_flamelets.py <solutions_file> [-o <output_dir>] [-v]
+plot_flamelets <solutions_file> [-o <output_dir>] [-v]
 ```
 
 - `<solutions_file>`: Path to the HDF5 solutions file.
@@ -86,7 +86,7 @@ python plot_flamelets.py <solutions_file> [-o <output_dir>] [-v]
 To assemble the FPV table from existing solutions, run the following command:
 
 ```sh
-python assemble_table.py <solutions_file> <output_dir> [--verbose]
+assemble_table <solutions_file> <output_dir> [--verbose]
 ```
 
 - `<solutions_file>`: Path to the HDF5 solutions file.
