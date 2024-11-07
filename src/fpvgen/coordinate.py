@@ -72,7 +72,7 @@ class Coordinate:
         """
         group.create_dataset(dataset_name, data=self.grid)
         group.attrs["Name"] = self.name
-        group.attrs["Type"] = int(self.type)
+        group.attrs["Type"] = self.type.value
         group.attrs["Lower bound"] = self.lower_bound
         group.attrs["Upper bound"] = self.upper_bound
         group.attrs["Size"] = self.size

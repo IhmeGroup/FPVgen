@@ -209,10 +209,10 @@ def main():
         generator.learn_strain_chi_st_mapping(output_file=output_dir / "strain_chi_st.json")
 
         # Assemble the FPV table
-        # logger.info("Assembling the FPV table")
-        # generator.assemble_FPV_table_CharlesX(
-        #     output_dir=output_dir
-        # )
+        logger.info("Assembling the FPV table")
+        generator.assemble_FPV_table_CharlesX(
+            output_dir=output_dir
+        )
 
         # Create plots if requested
         if create_plots:

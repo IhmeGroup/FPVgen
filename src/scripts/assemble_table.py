@@ -1,3 +1,9 @@
+# assemble_table.py
+"""
+Script to assemble the FPV table from precomputed solutions.
+Usage:
+    python assemble_table.py <solutions_file> [<output_dir>] [-v]
+"""
 import argparse
 import logging
 from pathlib import Path
