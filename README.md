@@ -24,7 +24,7 @@ To install FPVgen, follow these steps:
     conda activate fpvgen
     ```
 
-3. Install the required dependencies using `pip` and `pyproject.toml`:
+3. Install FPVgen and its dependencies using `pip` and `pyproject.toml`:
     ```sh
     pip install .
     ```
