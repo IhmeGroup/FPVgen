@@ -43,7 +43,7 @@ loglevel = 0                     # Log level for the Cantera solver
 
 [tabulation]
 dims = [200, 2, 200]                      # Number of points in each dimension: [Z, Zvar, L]
-force_monotonicity = true                 # Force monotonicity in the flamelet table
+force_monotonicity = false                # Force monotonicity in the flamelet table
 igniting_table = false                    # Whether to create an igniting table
 include_species_mass_fractions = "all"    # Species mass fractions to include in the table: "all" or list of species
 include_species_production_rates = "all"  # Species production rates to include in the table: "all" or list of species
@@ -57,5 +57,5 @@ y_quantity = "T_max"  # y-axis quantity: "T_max" or "T_st"
 colormap = "viridis"  # Colormap for temperature profiles
 
 [plotting.table]
-vars = ["T0", "SRC_PROG"]  # Variables to plot
-colormap = "viridis"      # Colormap for table plots
+vars = ["T0", "SRC_PROG", "OH", "CO"]  # Variables to plot, or "all"
+colormap = "viridis"                   # Colormap for table plots

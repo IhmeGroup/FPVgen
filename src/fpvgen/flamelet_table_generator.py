@@ -1641,6 +1641,9 @@ class FlameletTableGenerator:
 
         plt.rcParams.update(pyplot_params)
 
+        if vars == "all":
+            vars = list(self.data_table.keys())
+
         for var in vars:
             if Q_plot == 0.0:
                 plot_data = self.data_table[var][:, 0, :].T
