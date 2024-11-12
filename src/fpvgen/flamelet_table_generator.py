@@ -217,7 +217,7 @@ class FlameletTableGenerator:
         """
         Z = self.flame.mixture_fraction("Bilger")[::-1]
         cp = self.flame.cp_mass[::-1]
-        return np.gradient(np.log(cp), Z)
+        return np.gradient(np.log(cp), Z)[::-1]
 
     def _estimate_chi_st_from_strain(self, strain_rate: float) -> float:
         """Estimate the stoichiometric scalar dissipation rate from a target strain rate.
@@ -1047,11 +1047,16 @@ class FlameletTableGenerator:
 
         return generator
 
-    def write_FlameMaster(self, output_dir: Path):
+    def write_FlameMaster(
+        self,
+        output_dir: Path,
+        reinterp_Z: bool = True,
+    ):
         """Write FlameMaster input files for a single solution.
 
         Args:
             output_dir: Directory path where files will be saved
+            reinterp_Z: Whether to reinterpolate the solution onto a new Z grid. This prevents issues related to dZ=0 portions of the solution.
         """
         solution = self.solutions[-1]
 
@@ -1066,14 +1071,32 @@ class FlameletTableGenerator:
         flamemaster_dir.mkdir(parents=True, exist_ok=True)
         filename = flamemaster_dir / f"{fuel_name}_{pressure_str}{chi_str}{tf_str}{to_str}{Tst_str}"
 
+        Z_flame = self.flame.mixture_fraction("Bilger")
+
+        if reinterp_Z:
+            N_points = 500
+            i_cut = N_points // 3
+            Z_new = coordinate.CoordinateLinearThenStretched("Z", 0, self.Z_st, 1, i_cut, N_points - i_cut)
+        else:
+            N_points = len(Z_flame)
+        
+        def build_interp(Z, data):
+            return interpolate.interp1d(Z, data, axis=0, bounds_error=False, fill_value=(data[0], data[-1]))
+
         def write_array(f, name, data, n_cols=5):
+            if reinterp_Z:
+                interp = build_interp(Z_flame, data)
+                data_write = interp(Z_new.grid)
+            else:
+                data_write = data
+
             f.write(f"{name}\n")
             i_col = 0
-            for i in range(len(data)):
+            for i in range(len(data_write)):
                 if i_col == n_cols:
                     f.write("\n")
                     i_col = 0
-                f.write(f"\t{data[i]:0.6e}")
+                f.write(f"\t{data_write[i]:0.6e}")
                 i_col += 1
             f.write("\n")
 
@@ -1085,8 +1108,8 @@ class FlameletTableGenerator:
             f.write(f"\n")
             f.write(f'title = "planar counterflow diffusion flame"\n')
             f.write(f'mechanism = "{self.mechanism_file}"\n')
-            f.write(f"author = FPVgen\n")
-            f.write(f"date = {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+            f.write(f"author = \"FPVgen\"\n")
+            f.write(f"date = \"{datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\"\n")
             f.write(f"\n")
             f.write(f"fuel = {fuel_name}\n")
             f.write(f"pressure = {self.pressure/1e5} [bar]\n")
@@ -1111,43 +1134,43 @@ class FlameletTableGenerator:
             f.write(f"end\n")
             f.write(f"\n")
             f.write(f"numOfSpecies = {self.gas.n_species}\n")
-            f.write(f"gridPoints = {len(self.flame.grid)}\n")
+            f.write(f"gridPoints = {N_points}\n")
             f.write(f"\n")
 
             # Write flame profiles
             f.write(f"body\n")
-            write_array(f, "Z", self.flame.mixture_fraction("Bilger")[::-1])
-            write_array(f, "temperature [K]", self.flame.T[::-1])
+            write_array(f, "Z", self.flame.mixture_fraction("Bilger"))
+            write_array(f, "temperature [K]", self.flame.T)
             for k in range(self.gas.n_species):
-                write_array(f, f"massfraction-{self.gas.species_names[k]}", self.flame.Y[k, ::-1])
-            write_array(f, "W", self.flame.mean_molecular_weight[::-1])
-            write_array(f, "ZBilger", self.flame.mixture_fraction("Bilger")[::-1])
-            write_array(f, "chi [1/s]", solution["chi"][::-1])
-            write_array(f, "density", self.flame.density[::-1])
-            write_array(f, "lambda [W/m K]", self.flame.thermal_conductivity[::-1])
-            write_array(f, "cp [J/kg K]", self.flame.cp_mass[::-1])
+                write_array(f, f"massfraction-{self.gas.species_names[k]}", self.flame.Y[k, :])
+            write_array(f, "W", self.flame.mean_molecular_weight)
+            write_array(f, "ZBilger", self.flame.mixture_fraction("Bilger"))
+            write_array(f, "chi [1/s]", solution["chi"])
+            write_array(f, "density", self.flame.density)
+            write_array(f, "lambda [W/m K]", self.flame.thermal_conductivity)
+            write_array(f, "cp [J/kg K]", self.flame.cp_mass)
             write_array(
                 f,
                 "lambdaOverCp [kg/ms]",
-                (self.flame.thermal_conductivity[::-1] / self.flame.cp_mass[::-1]),
+                (self.flame.thermal_conductivity / self.flame.cp_mass),
             )
-            write_array(f, "mu [kg/sm]", self.flame.viscosity[::-1])
+            write_array(f, "mu [kg/sm]", self.flame.viscosity)
             for k in range(self.gas.n_species):
                 write_array(
                     f,
                     f"ProdRate-{self.gas.species_names[k]} [kg/m^3s]",
-                    self.flame.net_production_rates[k, ::-1] * self.gas.molecular_weights[k],
+                    self.flame.net_production_rates[k, :] * self.gas.molecular_weights[k],
                 )
-            write_array(f, "ProgVar", self._compute_progress_variable()[::-1])
-            write_array(f, "ProdRateProgVar [kg/m^3s]", self._compute_progress_variable_production()[::-1])
-            write_array(f, "TotalEnthalpy [J/kg]", self.flame.enthalpy_mass[::-1])
-            write_array(f, "HeatRelease [J/m^3 s]", self.flame.heat_release_rate[::-1])
+            write_array(f, "ProgVar", self._compute_progress_variable())
+            write_array(f, "ProdRateProgVar [kg/m^3s]", self._compute_progress_variable_production())
+            write_array(f, "TotalEnthalpy [J/kg]", self.flame.enthalpy_mass)
+            write_array(f, "HeatRelease [J/m^3 s]", self.flame.heat_release_rate)
             write_array(f, "Diffusivity [m/s]", np.zeros_like(self.flame.grid))  # Real gas thing, zeros are fine for now
             write_array(f, "rho_Diffusivity [kg/(m^2 s)]", np.zeros_like(self.flame.grid))  # Real gas thing, zeros are fine for now
-            write_array(f, "TotalEnthalpy_rg [J/kg]", self.flame.enthalpy_mass[::-1] + self.flame.cp_mass[::-1])  # Real gas thing, zeros are fine for now
+            write_array(f, "TotalEnthalpy_rg [J/kg]", self.flame.enthalpy_mass + self.flame.cp_mass)  # Real gas thing, zeros are fine for now
             write_array(f, "IsoCompressibility [m^2/N]", np.zeros_like(self.flame.grid))  # Real gas thing, zeros are fine for now
             write_array(f, "IsenCompressibility [m^2/N]", np.zeros_like(self.flame.grid))  # Real gas thing, zeros are fine for now
-            write_array(f, "SpeedOfSound [m/s]", self.flame.sound_speed[::-1])
+            write_array(f, "SpeedOfSound [m/s]", self.flame.sound_speed)
             write_array(f, "dLnCpDZ", self._compute_dLnCpDZ())
             write_array(f, "SumCpiOverCpMixDYiDZ", np.zeros_like(self.flame.grid))  # Real gas thing, zeros are fine for now
 
@@ -1391,10 +1414,10 @@ class FlameletTableGenerator:
             header.create_dataset("Variable Names", data=vars)
 
             # Data dataset
-            n_tot = dims[0] * dims[1] * dims[2] * len(vars)
-            data_raw = np.empty((n_tot))
+            n_tot = dims[0] * dims[1] * dims[2]
+            data_raw = np.empty((n_tot * len(vars)))
             for i, var in enumerate(vars):
-                data_raw[i :: len(vars)] = self.data_table[var].ravel(order="C")
+                data_raw[i*n_tot : (i+1)*n_tot] = self.data_table[var].ravel(order="C")
             f.create_dataset("Data", data=data_raw)
 
             # Coordinates group
