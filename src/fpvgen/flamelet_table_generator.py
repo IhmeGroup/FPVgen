@@ -166,6 +166,7 @@ class FlameletTableGenerator:
         for species, value in self.prog_def.items():
             idx = self.gas.species_index(species)
             prog_var_prod += value * self.flame.net_production_rates[idx, :] * self.gas.molecular_weights[idx]
+        prog_var_prod /= self.gas.density
         return prog_var_prod
 
     def _compute_scalar_dissipation(self, mixture_fraction: Optional[np.ndarray] = None) -> Tuple[np.ndarray, float]:
@@ -1295,14 +1296,14 @@ class FlameletTableGenerator:
                 self.gas.UV = E0_p[j], self.gas.v
                 T0_p[j] = self.gas.T
                 MU0_p[j] = self.gas.viscosity
-                LOC0_p[j] = self.gas.thermal_conductivity / (self.gas.cp_mass * self.gas.density)
+                LOC0_p[j] = self.gas.thermal_conductivity / self.gas.cp_mass
 
                 # Negative perturbation
                 self.gas.TPY = self.flame.T[j], self.flame.P, self.flame.Y[:, j]
                 self.gas.UV = E0_m[j], self.gas.v
                 T0_m[j] = self.gas.T
                 MU0_m[j] = self.gas.viscosity
-                LOC0_m[j] = self.gas.thermal_conductivity / (self.gas.cp_mass * self.gas.density)
+                LOC0_m[j] = self.gas.thermal_conductivity / self.gas.cp_mass
             # Energy derivatives
             dTm = T0_i - T0_m
             dTp = T0_p - T0_i
@@ -1317,27 +1318,27 @@ class FlameletTableGenerator:
             interp = build_interp(Z_i, GAMMA0_i)
             data_interp_Z["GAMMA0"][:, i] = interp(Z.grid)
 
-            # AGAMMA
+            # AGAMMA (exponent of specific gas constant) [-]
             AGAMMA_i = -d2edT2 * (GAMMA0_i - 1.0) ** 2 / ROM_i
             interp = build_interp(Z_i, AGAMMA_i)
             data_interp_Z["AGAMMA"][:, i] = interp(Z.grid)
 
-            # MU0 (viscosity) [kg/m/s] ?
+            # MU0 (viscosity) [kg/m/s]
             MU0_i = self.flame.viscosity
             interp = build_interp(Z_i, MU0_i)
             data_interp_Z["MU0"][:, i] = interp(Z.grid)
 
-            # AMU
+            # AMU (exponent of viscosity) [-]
             AMU_i = np.log(MU0_p / MU0_m) / np.log(T0_p / T0_m)
             interp = build_interp(Z_i, AMU_i)
             data_interp_Z["AMU"][:, i] = interp(Z.grid)
 
-            # LOC0 (lambda / (cp * rho)) [m^2/s]
-            LOC0_i = self.flame.thermal_conductivity / (self.flame.cp_mass * self.flame.density)
+            # LOC0 (lambda / cp) [kg/m/s]
+            LOC0_i = self.flame.thermal_conductivity / self.flame.cp_mass
             interp = build_interp(Z_i, LOC0_i)
             data_interp_Z["LOC0"][:, i] = interp(Z.grid)
 
-            # ALOC
+            # ALOC (exponent of lambda / cp) [-]
             ALOC_i = np.log(LOC0_p / LOC0_m) / np.log(T0_p / T0_m)
             interp = build_interp(Z_i, ALOC_i)
             data_interp_Z["ALOC"][:, i] = interp(Z.grid)
@@ -1363,9 +1364,10 @@ class FlameletTableGenerator:
                 interp = build_interp(Z_i, Y_i)
                 data_interp_Z[sp][:, i] = interp(Z.grid)
 
-            # Species production rates [kmol/m^3/s] ?
+            # Species production rates [1/s]
             for sp in include_species_production_rates:
-                SRC_i = self.flame.net_production_rates[self.gas.species_index(sp), :]
+                k = self.gas.species_index(sp)
+                SRC_i = self.flame.net_production_rates[k, :] * self.gas.molecular_weights[k] / self.flame.density
                 interp = build_interp(Z_i, SRC_i)
                 data_interp_Z["SRC_" + sp][:, i] = interp(Z.grid)
 
