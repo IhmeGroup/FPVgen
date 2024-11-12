@@ -157,7 +157,7 @@ class FlameletTableGenerator:
         return prog_var
 
     def _compute_progress_variable_production(self) -> np.ndarray:
-        """Compute the progress variable production rate field for the current flame solution.
+        """Compute the progress variable production rate [kg/m^3s] field for the current flame solution.
 
         Returns:
             np.ndarray: Progress variable production rate field
@@ -166,7 +166,6 @@ class FlameletTableGenerator:
         for species, value in self.prog_def.items():
             idx = self.gas.species_index(species)
             prog_var_prod += value * self.flame.net_production_rates[idx, :] * self.gas.molecular_weights[idx]
-        prog_var_prod /= self.gas.density
         return prog_var_prod
 
     def _compute_scalar_dissipation(self, mixture_fraction: Optional[np.ndarray] = None) -> Tuple[np.ndarray, float]:
@@ -1201,9 +1200,6 @@ class FlameletTableGenerator:
             include_species_mass_fractions: List of species for which to include mass fractions
             include_species_production_rates: List of species for which to include production rates
         """
-        if force_monotonicity:
-            raise NotImplementedError("Monotonicity enforcement is not yet implemented")
-
         # Build filename
         fuel_str = "".join([key for key in self.fuel_inlet.composition.keys()])
         oxidizer_str = "".join([key for key in self.oxidizer_inlet.composition.keys()])
@@ -1214,6 +1210,7 @@ class FlameletTableGenerator:
         filename = output_dir / f"{fuel_str}_{oxidizer_str}_{pressure_str}_{tf_str}_{to_str}_{dim_str}.h5"
 
         # Create the dimensions
+        N_sol = len(self.solutions)
         i_cut = dims[0] // 3
         Z = coordinate.CoordinateLinearThenStretched("Z", 0, self.Z_st, 1, i_cut, dims[0] - i_cut)
         Q = coordinate.CoordinatePowerLaw("Sz", 0, 1, dims[1], 2.7)
@@ -1245,14 +1242,14 @@ class FlameletTableGenerator:
         vars += ["ZBilger"]
         vars += include_species_mass_fractions
         vars += ["SRC_" + sp for sp in include_species_production_rates]
-        data_interp_Z = {var: np.zeros((dims[0], len(self.solutions))) for var in vars}
+        data_interp_Z = {var: np.zeros((dims[0], N_sol)) for var in vars}
 
         def build_interp(Z, data):
             return interpolate.interp1d(Z, data, axis=0, bounds_error=False, fill_value=(data[0], data[-1]))
 
         # Compute the data arrays
         for i, sol in enumerate(self.solutions):
-            self.logger.info(f"Processing flamelet {i+1}/{len(self.solutions)}...")
+            self.logger.info(f"Processing flamelet {i+1}/{N_sol}...")
             self.flame.from_array(sol["state"])
 
             # ZBilger [-]
@@ -1308,10 +1305,12 @@ class FlameletTableGenerator:
             dTm = T0_i - T0_m
             dTp = T0_p - T0_i
             dT = T0_p - T0_m
-            dedT = (dTm * dTm * (E0_i + deltaE) + (dTp - dTm) * dT * E0_i - dTp * dTp * (E0_i - deltaE)) / (
-                dTp * dTm * dT
-            )
-            d2edT2 = 2.0 * (dTm * (E0_i + deltaE) - dT * E0_i + dTp * (E0_i - deltaE)) / (dTp * dTm * dT)
+            dedT = (  dTm**2 *           (E0_i + deltaE)
+                    + dT * (dTp - dTm) *  E0_i
+                    - dTp**2 *           (E0_i - deltaE)) / (dTp * dTm * dT)
+            d2edT2 = 2.0 * (  dTm * (E0_i + deltaE)
+                            - dT *   E0_i
+                            + dTp * (E0_i - deltaE)) / (dTp * dTm * dT)
 
             # GAMMA0 (specific gas constant) [-]
             GAMMA0_i = ROM_i / dedT + 1.0
@@ -1344,7 +1343,7 @@ class FlameletTableGenerator:
             data_interp_Z["ALOC"][:, i] = interp(Z.grid)
 
             # SRC_PROG [1/s]
-            SRC_PROG_i = self._compute_progress_variable_production()
+            SRC_PROG_i = self._compute_progress_variable_production() / self.flame.density
             interp = build_interp(Z_i, SRC_PROG_i)
             data_interp_Z["SRC_PROG"][:, i] = interp(Z.grid)
 
@@ -1371,13 +1370,61 @@ class FlameletTableGenerator:
                 interp = build_interp(Z_i, SRC_i)
                 data_interp_Z["SRC_" + sp][:, i] = interp(Z.grid)
 
-        # Compute the normalized progress variable [-]
+        # Sort flamelets by peak progress variable
+        C_peak = np.max(data_interp_Z["PROG"], axis=0)
+        i_sort = np.argsort(C_peak)
+        for var in vars:
+            data_interp_Z[var] = data_interp_Z[var][:, i_sort]
+        
+        # Compute the normalized progress variable (Lambda)
         C_arr = data_interp_Z["PROG"]
-        C_min = np.min(C_arr, axis=1)
-        C_max = np.max(C_arr, axis=1)
-        data_interp_Z["PROG_NORM"] = (C_arr - C_min[:, np.newaxis]) / (C_max - C_min)[:, np.newaxis]
 
-        # Interpolate the data along the normalized progress variable
+        if force_monotonicity:
+            # Min and max values are taken from the first and last solutions,
+            # which have been sorted by peak progress variable
+            C_min = np.tile(C_arr[:,  0][:, np.newaxis], (1, N_sol))
+            C_max = np.tile(C_arr[:, -1][:, np.newaxis], (1, N_sol))
+            L_arr = (C_arr - C_min) / (C_max - C_min)
+
+            # Handle near Z=0 and Z=1, where min and max are close
+            tol = 1e-4
+            index = np.logical_or(((C_max - C_min) < tol), (C_min > C_max))
+            L_uniform = np.tile(np.linspace(0, 1, N_sol), (dims[0], 1))
+            L_arr[index] = L_uniform[index]
+
+            # Make CA well-behaved
+            tol = 1e-10
+            adj = 1e-8
+            for i_Z in range(dims[0]):
+                dL_min = np.inf
+                L_min_adj = np.inf
+                for i_L in range(N_sol-2, 0, -1):
+                    dL = L_arr[i_Z, i_L+1] - L_arr[i_Z, i_L]
+                    if dL < tol:
+                        dL_min = min(dL_min, dL)
+                        L_min_adj = min(L_min_adj, L_arr[i_Z, i_L])
+                        L_arr[i_Z, i_L] = L_arr[i_Z, i_L+1] - adj
+                if dL_min < np.inf:
+                    self.logger.warning(f"Adjusted Lambda by at least {-dL_min:.2e} at Z = {Z.grid[i_Z]:.2e}")
+        else:
+            # Min and max values are taken from any solution, and the solution
+            # from which they are taken may vary with Z
+            C_min = np.tile(np.min(C_arr, axis=1)[:, np.newaxis], (1, N_sol))
+            C_max = np.tile(np.max(C_arr, axis=1)[:, np.newaxis], (1, N_sol))
+            L_arr = (C_arr - C_min) / (C_max - C_min)
+
+            # Handle near Z=0 and Z=1, where min and max are close
+            tol = 1e-4
+            index = (C_max - C_min) < tol
+            L_uniform = np.tile(np.linspace(0, 1, N_sol), (dims[0], 1))
+            L_arr[index] = L_uniform[index]
+
+            # Treat values near max
+            L_arr[L_arr > 1.0 - tol] = 1.0
+
+        data_interp_Z["PROG_NORM"] = L_arr
+
+        # Interpolate the data onto the Lambda coordinate
         vars_interp = vars + ["PROG_NORM"]
         self.data_table = {var: np.zeros((dims[0], dims[1], dims[2])) for var in vars_interp}
         for var in vars_interp:
@@ -1394,10 +1441,10 @@ class FlameletTableGenerator:
                 self.data_table[var][i, :, :] = data_table_i
 
         # Handle ignition
-        threshold = 1e-8
-        self.data_table["SRC_PROG"][self.data_table["PROG_NORM"] > 1.0 - threshold] = 0.0
+        tol = 1e-8
+        self.data_table["SRC_PROG"][self.data_table["PROG_NORM"] > 1.0 - tol] = 0.0
         if not igniting_table:
-            self.data_table["SRC_PROG"][self.data_table["PROG_NORM"] < threshold] = 0.0
+            self.data_table["SRC_PROG"][self.data_table["PROG_NORM"] < tol] = 0.0
 
         # Write the table to the HDF5 file in CharlesX format
         with h5py.File(filename, "w") as f:
