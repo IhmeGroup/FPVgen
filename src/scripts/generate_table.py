@@ -117,18 +117,18 @@ def create_generator(config: dict) -> FlameletTableGenerator:
     # Create generator
     return FlameletTableGenerator(
         mechanism_file=config["mechanism"]["file"],
-        transport_model=config["mechanism"].get("transport_model"),
+        transport_model=config["mechanism"]["transport_model"],
         fuel_inlet=fuel_inlet,
         oxidizer_inlet=oxidizer_inlet,
-        pressure=config["conditions"].get("pressure"),
-        prog_def=config["mechanism"].get("prog_def"),
-        width_ratio=config["solver"].get("width_ratio"),
-        width_change_enable=config["solver"].get("width_change_enable"),
-        width_change_max=config["solver"].get("width_change_max"),
-        width_change_min=config["solver"].get("width_change_min"),
-        initial_chi_st=config["conditions"].get("initial_chi_st"),
-        solver_loglevel=config["solver"].get("loglevel"),
-        strain_chi_st_model_param_file=config["solver"].get("strain_chi_st_model_param_file"),
+        pressure=config["conditions"]["pressure"],
+        prog_def=config["mechanism"]["prog_def"],
+        width_ratio=config["solver"]["width_ratio"],
+        width_change_enable=config["solver"]["width_change_enable"],
+        width_change_max=config["solver"]["width_change_max"],
+        width_change_min=config["solver"]["width_change_min"],
+        initial_chi_st=config["conditions"]["initial_chi_st"],
+        solver_loglevel=config["solver"]["loglevel"],
+        strain_chi_st_model_param_file=config["solver"]["strain_chi_st_model_param_file"],
     )
 
 
@@ -178,7 +178,6 @@ def main():
             restart_config = config["restart"]
             solutions_file = Path(restart_config["solutions_file"])
             generator = FlameletTableGenerator.load_solutions(solutions_file)
-            restart_from = restart_config.get("solution_index", -1)  # Default to last solution
 
             # If output_dir is different from solutions_file location, copy existing solutions
             if output_dir != solutions_file.parent:
@@ -188,7 +187,6 @@ def main():
             # Create new generator
             logger.info("Initializing new flamelet generator")
             generator = create_generator(config)
-            restart_from = None
 
         # Pop some solver options that are not passed to compute_s_curve
         solver_options = config["solver"]
@@ -201,7 +199,7 @@ def main():
 
         # Compute flamelets
         logger.info("Computing flamelet solutions")
-        solver_options = config.get("solver", {})
+        solver_options = config["solver"]
         generator.compute_s_curve(**solver_options)
 
         # Learn the strain rate and chi_st relationship
@@ -210,24 +208,24 @@ def main():
 
         # Assemble the FPV table
         logger.info("Assembling the FPV table")
-        generator.assemble_FPV_table_CharlesX(output_dir=output_dir, **config.get("tabulation", {}))
+        generator.assemble_FPV_table_CharlesX(output_dir=output_dir, **config["tabulation"])
 
         # Create plots if requested
         if create_plots:
             logger.info("Creating visualization plots")
             generator.plot_s_curve(
                 output_file=output_dir / "s_curve.png",
-                **config.get("plotting", {}).get("s_curve", {}),
+                **config["plotting"]["s_curve"],
             )
             generator.plot_temperature_profiles(
                 output_file=output_dir / "temperature_profiles.png",
-                **config.get("plotting", {}).get("profiles", {}),
+                **config["plotting"]["profiles"],
             )
             generator.plot_strain_chi_st(strain_rate_type="max", output_file=output_dir / "strain_max_chi_st.png")
             generator.plot_strain_chi_st(strain_rate_type="nom", output_file=output_dir / "strain_nom_chi_st.png")
             generator.plot_table(
                 output_prefix=output_dir / "table",
-                **config.get("plotting", {}).get("table", {}),
+                **config["plotting"]["table"],
             )
 
         logger.info("Flamelet generation completed successfully")

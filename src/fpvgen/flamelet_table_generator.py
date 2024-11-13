@@ -1183,7 +1183,7 @@ class FlameletTableGenerator:
 
     def assemble_FPV_table_CharlesX(
         self,
-        output_dir: str,
+        output_dir: Path,
         dims: Tuple[int, int, int] = (100, 2, 100),
         force_monotonicity: bool = False,
         igniting_table: bool = False,
