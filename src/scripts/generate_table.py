@@ -117,18 +117,18 @@ def create_generator(config: dict) -> FlameletTableGenerator:
     # Create generator
     return FlameletTableGenerator(
         mechanism_file=config["mechanism"]["file"],
-        transport_model=config["mechanism"]["transport_model"],
+        transport_model=config["mechanism"].get("transport_model"),
         fuel_inlet=fuel_inlet,
         oxidizer_inlet=oxidizer_inlet,
         pressure=config["conditions"]["pressure"],
         prog_def=config["mechanism"]["prog_def"],
-        width_ratio=config["solver"]["width_ratio"],
-        width_change_enable=config["solver"]["width_change_enable"],
-        width_change_max=config["solver"]["width_change_max"],
-        width_change_min=config["solver"]["width_change_min"],
-        initial_chi_st=config["conditions"]["initial_chi_st"],
-        solver_loglevel=config["solver"]["loglevel"],
-        strain_chi_st_model_param_file=config["solver"]["strain_chi_st_model_param_file"],
+        width_ratio=config["solver"].get("width_ratio"),
+        width_change_enable=config["solver"].get("width_change_enable"),
+        width_change_max=config["solver"].get("width_change_max"),
+        width_change_min=config["solver"].get("width_change_min"),
+        initial_chi_st=config["conditions"].get("initial_chi_st"),
+        solver_loglevel=config["solver"].get("loglevel"),
+        strain_chi_st_model_param_file=config["solver"].get("strain_chi_st_model_param_file"),
     )
 
 
