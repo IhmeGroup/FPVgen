@@ -757,7 +757,7 @@ class FlameletTableGenerator:
             self.logger.info(
                 f"Iteration {i} completed: T_max = {T_max:.2f}, "
                 f"chi_st = {chi_st:.4e}, "
-                f"strain_rate_nom = {strain_rate_nom:.2f}"
+                f"strain_rate_nom = {strain_rate_nom:.4e}"
             )
 
             if chi_st < self.solutions[0]["metadata"]["chi_st"] and not self.width_change_enable:
@@ -1052,7 +1052,7 @@ class FlameletTableGenerator:
         output_dir: Path,
         reinterp_Z: bool = True,
     ):
-        """Write FlameMaster input files for a single solution.
+        """Write FlameMaster output files for a single solution.
 
         Args:
             output_dir: Directory path where files will be saved
