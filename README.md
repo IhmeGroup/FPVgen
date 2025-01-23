@@ -1,3 +1,5 @@
+[![DOI](https://zenodo.org/badge/880419274.svg)](https://zenodo.org/badge/latestdoi/880419274)
+
 # FPVgen
 FPVgen is a software tool for generating flamelet progress variable (FPV) tables for combustion simulations. It handles the generation of flamelet solutions for counterflow diffusion flames, including the computation of complete S-curves with stable, unstable, and extinction branches.
 
