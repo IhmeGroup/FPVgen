@@ -4,6 +4,9 @@ authors:
 - family-names: "Bonanni"
   given-names: "Matthew"
   orcid: "https://orcid.org/0000-0002-8671-7955"
+- family-names: "Ihme"
+  given-names: "Matthias"
+  orcid: "https://orcid.org/0000-0002-4158-7050"
 - family-names: "Laboratory of Fluids in Complex Environments"
 title: "FPVgen"
 version: 0.1.0
