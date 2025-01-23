@@ -26,7 +26,7 @@ dependencies = [
     "pandas",
     "h5py",
     "tomli",
-    "cantera >=3.1.0a4"
+    "cantera >=3.1.0"
 ]
 
 [project.urls]
