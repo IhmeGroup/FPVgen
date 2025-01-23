@@ -1,0 +1,14 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+authors:
+- family-names: "Bonanni"
+  given-names: "Matthew"
+  orcid: "https://orcid.org/0000-0002-8671-7955"
+- family-names: "Ihme"
+  given-names: "Matthias"
+  orcid: "https://orcid.org/0000-0002-4158-7050"
+title: "FPVgen"
+version: 0.1.0
+doi: 10.5281/zenodo.14728543
+date-released: 2025-01-23
+url: "https://github.com/IhmeGroup/FPVgen"
