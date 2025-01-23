@@ -3,7 +3,7 @@ FPVgen is a software tool for generating flamelet progress variable (FPV) tables
 
 ## Installation
 
-**Note:** This repository requires Cantera >= 3.1, which is currently in development. These instructions will install the development version of Cantera.
+**Note:** This repository requires Cantera >= 3.1.
 
 To install FPVgen, follow these steps:
 
