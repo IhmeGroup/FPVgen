@@ -98,3 +98,8 @@ assemble_table <solutions_file> <output_dir> [--verbose]
 ## License
 
 This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.
+
+## Citation
+
+Citation information is provided via Zenodo: [10.5281/zenodo.14728543](https://doi.org/10.5281/zenodo.14728543)
+
