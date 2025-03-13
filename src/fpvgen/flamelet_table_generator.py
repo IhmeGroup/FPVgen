@@ -48,6 +48,7 @@ class FlameletTableGenerator:
         fuel_inlet (InletCondition): Fuel stream inlet conditions
         oxidizer_inlet (InletCondition): Oxidizer stream inlet conditions
         pressure (float): Operating pressure in Pa
+        eos (str): Equation of state to use in Cantera
         prog_def (Dict): Progress variable definition
         width_ratio (float): Ratio of the domain width to the flame thickness
         width_change_enable (bool): Enable domain width changes
@@ -68,6 +69,7 @@ class FlameletTableGenerator:
         fuel_inlet: InletCondition,
         oxidizer_inlet: InletCondition,
         pressure: float,
+        eos: Optional[str] = None,
         prog_def: Optional[Dict] = None,
         width_ratio: Optional[float] = 10.0,
         width_change_enable: Optional[bool] = False,
@@ -85,6 +87,7 @@ class FlameletTableGenerator:
             fuel_inlet: Fuel stream inlet conditions
             oxidizer_inlet: Oxidizer stream inlet conditions
             pressure: Operating pressure in Pa
+            eos: Equation of state to use in Cantera
             prog_def: Progress variable definition
             width_ratio: Ratio of the domain width to the flame thickness
             width_change_enable: Enable domain width changes
@@ -103,6 +106,7 @@ class FlameletTableGenerator:
         self.fuel_inlet = fuel_inlet
         self.oxidizer_inlet = oxidizer_inlet
         self.pressure = pressure
+        self.eos = eos
         self.width_ratio = width_ratio
         self.width_change_enable = width_change_enable
         self.width_change_max = width_change_max
@@ -122,7 +126,16 @@ class FlameletTableGenerator:
             self.strain_chi_st_model_params = None
 
         # Initialization
-        self.gas = ct.Solution(self.mechanism_file)
+        if self.eos is not None: # user specified EOS
+            if self.eos == "Peng-Robinson" or self.eos == "Redlich-Kwong":
+                self.gas = ct.Solution(self.mechanism_file, self.eos)
+            elif self.eos == "IdealGas":
+                self.gas = ct.Solution(self.mechanism_file)
+            else:
+                raise ValueError(f"Invalid EOS: {self.eos}")
+            self.logger.info(f"Using {self.eos} EOS")
+        else: # use default EOS
+            self.gas = ct.Solution(self.mechanism_file)
         self.Z_st = self._compute_stoichiometric_mixture_fraction()
         self.logger.info("Z_st = {:.8f}".format(self.Z_st))
         self.width = 1.0  # Needed for initial flame construction but will be overridden
@@ -930,6 +943,7 @@ class FlameletTableGenerator:
                     "width_change_min": self.width_change_min,
                     "initial_chi_st": self.initial_chi_st,
                     "solver_loglevel": self.solver_loglevel,
+                    "eos": self.eos,
                     "prog_def": self.prog_def,
                     "Z_st": float(self.Z_st),
                     "fuel_inlet": {
@@ -1013,6 +1027,7 @@ class FlameletTableGenerator:
                 fuel_inlet=InletCondition(**params["fuel_inlet"]),
                 oxidizer_inlet=InletCondition(**params["oxidizer_inlet"]),
                 pressure=params["pressure"],
+                eos=params["eos"],
                 prog_def=params["prog_def"],
                 width_ratio=params["width_ratio"],
                 width_change_enable=params["width_change_enable"],
@@ -1108,6 +1123,7 @@ class FlameletTableGenerator:
             f.write(f"\n")
             f.write(f'title = "planar counterflow diffusion flame"\n')
             f.write(f'mechanism = "{self.mechanism_file}"\n')
+            f.write(f'eos= "{self.eos}"\n')
             f.write(f"author = \"FPVgen\"\n")
             f.write(f"date = \"{datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\"\n")
             f.write(f"\n")

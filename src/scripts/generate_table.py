@@ -121,6 +121,7 @@ def create_generator(config: dict) -> FlameletTableGenerator:
         fuel_inlet=fuel_inlet,
         oxidizer_inlet=oxidizer_inlet,
         pressure=config["conditions"]["pressure"],
+        eos=config["mechanism"].get("eos"),
         prog_def=config["mechanism"]["prog_def"],
         width_ratio=config["solver"].get("width_ratio"),
         width_change_enable=config["solver"].get("width_change_enable"),
