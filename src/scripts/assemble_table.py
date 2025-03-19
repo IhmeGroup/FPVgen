@@ -89,16 +89,12 @@ def main():
         logger.info(f"Loading solutions from {args.solutions_file}")
         generator = FlameletTableGenerator.load_solutions(args.solutions_file)
 
-        # Pop some solver options that are not passed to compute_s_curve
-        solver_options = config["solver"]
-        create_plots = solver_options.pop("create_plots", True)
-
         # Assemble FPV table
         logger.info(f"Assembling FPV table in {args.output_dir}")
         generator.assemble_FPV_table_CharlesX(output_dir=args.output_dir, **config["tabulation"])
 
         # Create plots if requested
-        if create_plots:
+        if config["plotting"].get("create_plots", True):
             logger.info("Creating visualization plots")
             generator.plot_table(
                 output_prefix=output_dir / "table",
