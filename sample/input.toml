@@ -47,6 +47,7 @@ force_monotonicity = false                # Force monotonicity in the flamelet t
 igniting_table = false                    # Whether to create an igniting table
 include_species_mass_fractions = "all"    # Species mass fractions to include in the table: "all" or list of species
 include_species_production_rates = "all"  # Species production rates to include in the table: "all" or list of species
+add_activation_temperature = false        # Compute and add activation temperature to the table
 
 [plotting.s_curve]
 x_quantity = "chi_st" # x-axis quantity: "strain_rate" or "chi_st"
