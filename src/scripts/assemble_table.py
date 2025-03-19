@@ -80,6 +80,11 @@ def main():
         logger.info(f"Loading configuration from {args.config}")
         config = load_config(args.config)
 
+        # Set output directory
+        output_dir = Path(config["solver"].get("output_dir", "flamelet_results"))
+        output_dir.mkdir(parents=True, exist_ok=True)
+        logger.info(f"Output directory: {output_dir}")
+
         # Load solutions
         logger.info(f"Loading solutions from {args.solutions_file}")
         generator = FlameletTableGenerator.load_solutions(args.solutions_file)
@@ -87,6 +92,14 @@ def main():
         # Assemble FPV table
         logger.info(f"Assembling FPV table in {args.output_dir}")
         generator.assemble_FPV_table_CharlesX(output_dir=args.output_dir, **config["tabulation"])
+
+        # Create plots if requested
+        if config["plotting"].get("create_plots", True):
+            logger.info("Creating visualization plots")
+            generator.plot_table(
+                output_prefix=output_dir / "table",
+                **config["plotting"]["table"],
+            )
 
         logger.info("FPV table assembly completed successfully")
         return 0

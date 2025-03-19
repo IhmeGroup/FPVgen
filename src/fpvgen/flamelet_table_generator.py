@@ -885,7 +885,12 @@ class FlameletTableGenerator:
                 "cpu_time": sum(self.flame.jacobian_time_stats + self.flame.eval_time_stats),
             }
             data.append(step_data)
-            self.solutions.append({"state": self.flame.to_array(), "Z": Z, "chi": chi, "metadata": step_data})
+            self.solutions.append({
+                "state": self.flame.to_array(),
+                "Z": Z,
+                "chi": chi,
+                "metadata": step_data
+            })
 
             if output_dir:
                 self.save_solution(output_dir, len(self.solutions) - 1)
@@ -1079,7 +1084,7 @@ class FlameletTableGenerator:
             Z_new = coordinate.CoordinateLinearThenStretched("Z", 0, self.Z_st, 1, i_cut, N_points - i_cut)
         else:
             N_points = len(Z_flame)
-        
+
         def build_interp(Z, data):
             return interpolate.interp1d(Z, data, axis=0, bounds_error=False, fill_value=(data[0], data[-1]))
 
@@ -1244,6 +1249,7 @@ class FlameletTableGenerator:
         vars += ["ZBilger"]
         vars += include_species_mass_fractions
         vars += ["SRC_" + sp for sp in include_species_production_rates]
+        vars += ["TA"]
         data_interp_Z = {var: np.zeros((dims[0], N_sol)) for var in vars}
 
         def build_interp(Z, data):
@@ -1282,18 +1288,21 @@ class FlameletTableGenerator:
             E0_CHEM_i = np.zeros_like(self.flame.grid)
             for j in range(len(self.flame.grid)):
                 self.gas.TPY = 298.15, self.flame.P, self.flame.Y[:, j]
-                E0_CHEM_i[j] = (np.dot(self.gas.standard_enthalpies_RT, self.gas.X) *
-                                ct.gas_constant * self.gas.T /
-                                self.gas.mean_molecular_weight)
+                E0_CHEM_i[j] = (
+                    np.dot(self.gas.standard_enthalpies_RT, self.gas.X)
+                    * ct.gas_constant
+                    * self.gas.T
+                    / self.gas.mean_molecular_weight
+                )
             interp = build_interp(Z_i, E0_CHEM_i)
             data_interp_Z["E0_CHEM"][:, i] = interp(Z.grid)
-            
+
             # E0_SENS [J/kg]
             E0_SENS_i = E0_i - E0_CHEM_i
             interp = build_interp(Z_i, E0_SENS_i)
             data_interp_Z["E0_SENS"][:, i] = interp(Z.grid)
 
-            # Compute derivatives via perturbation
+            # Compute derivatives via energy perturbation
             rho0deltaE = 5000.0
             deltaE = rho0deltaE / self.flame.density
             E0_p = E0_i + deltaE
@@ -1304,6 +1313,8 @@ class FlameletTableGenerator:
             MU0_m = np.zeros_like(T0_i)
             LOC0_p = np.zeros_like(T0_i)
             LOC0_m = np.zeros_like(T0_i)
+            SRC_PROG_p = np.zeros_like(T0_i)
+            SRC_PROG_m = np.zeros_like(T0_i)
             for j in range(len(self.flame.grid)):
                 # Positive perturbation
                 self.gas.TPY = self.flame.T[j], self.flame.P, self.flame.Y[:, j]
@@ -1311,6 +1322,10 @@ class FlameletTableGenerator:
                 T0_p[j] = self.gas.T
                 MU0_p[j] = self.gas.viscosity
                 LOC0_p[j] = self.gas.thermal_conductivity / self.gas.cp_mass
+                for species, value in self.prog_def.items():
+                    idx = self.gas.species_index(species)
+                    SRC_PROG_p[j] += value * self.gas.net_production_rates[idx] * self.gas.molecular_weights[idx]
+                SRC_PROG_p[j] /= self.gas.density
 
                 # Negative perturbation
                 self.gas.TPY = self.flame.T[j], self.flame.P, self.flame.Y[:, j]
@@ -1318,6 +1333,10 @@ class FlameletTableGenerator:
                 T0_m[j] = self.gas.T
                 MU0_m[j] = self.gas.viscosity
                 LOC0_m[j] = self.gas.thermal_conductivity / self.gas.cp_mass
+                for species, value in self.prog_def.items():
+                    idx = self.gas.species_index(species)
+                    SRC_PROG_m[j] += value * self.gas.net_production_rates[idx] * self.gas.molecular_weights[idx]
+                SRC_PROG_m[j] /= self.gas.density
             # Energy derivatives
             dTm = T0_i - T0_m
             dTp = T0_p - T0_i
@@ -1386,20 +1405,27 @@ class FlameletTableGenerator:
                 SRC_i = self.flame.net_production_rates[k, :] * self.gas.molecular_weights[k] / self.flame.density
                 interp = build_interp(Z_i, SRC_i)
                 data_interp_Z["SRC_" + sp][:, i] = interp(Z.grid)
+            
+            # Activation temperature [K]
+            TA_i = np.log(SRC_PROG_p / SRC_PROG_m) / ((1.0 / T0_p) - (1.0 / T0_m))
+            TA_i = np.maximum(TA_i, 0.0)
+            TA_i[np.isnan(TA_i)] = 0.0
+            interp = build_interp(Z_i, TA_i)
+            data_interp_Z["TA"][:, i] = interp(Z.grid)
 
         # Sort flamelets by peak progress variable
         C_peak = np.max(data_interp_Z["PROG"], axis=0)
         i_sort = np.argsort(C_peak)
         for var in vars:
             data_interp_Z[var] = data_interp_Z[var][:, i_sort]
-        
+
         # Compute the normalized progress variable (Lambda)
         C_arr = data_interp_Z["PROG"]
 
         if force_monotonicity:
             # Min and max values are taken from the first and last solutions,
             # which have been sorted by peak progress variable
-            C_min = np.tile(C_arr[:,  0][:, np.newaxis], (1, N_sol))
+            C_min = np.tile(C_arr[:, 0][:, np.newaxis], (1, N_sol))
             C_max = np.tile(C_arr[:, -1][:, np.newaxis], (1, N_sol))
             L_arr = (C_arr - C_min) / (C_max - C_min)
 
@@ -1415,12 +1441,12 @@ class FlameletTableGenerator:
             for i_Z in range(dims[0]):
                 dL_min = np.inf
                 L_min_adj = np.inf
-                for i_L in range(N_sol-2, 0, -1):
-                    dL = L_arr[i_Z, i_L+1] - L_arr[i_Z, i_L]
+                for i_L in range(N_sol - 2, 0, -1):
+                    dL = L_arr[i_Z, i_L + 1] - L_arr[i_Z, i_L]
                     if dL < tol:
                         dL_min = min(dL_min, dL)
                         L_min_adj = min(L_min_adj, L_arr[i_Z, i_L])
-                        L_arr[i_Z, i_L] = L_arr[i_Z, i_L+1] - adj
+                        L_arr[i_Z, i_L] = L_arr[i_Z, i_L + 1] - adj
                 if dL_min < np.inf:
                     self.logger.warning(f"Adjusted Lambda by at least {-dL_min:.2e} at Z = {Z.grid[i_Z]:.2e}")
         else:
@@ -1456,13 +1482,17 @@ class FlameletTableGenerator:
                 data_table_i = interp(L.grid)
                 data_table_i = np.tile(data_table_i, (dims[1], 1))  # Expand to cover Q dimension
                 self.data_table[var][i, :, :] = data_table_i
+        
+        # Treat activation temperature
+        self.data_table["TA"][self.data_table["TA"] < 0.0] = 0.0
+        self.data_table["TA"][np.isnan(self.data_table["TA"])] = 0.0
 
         # Handle ignition
         tol = 1e-8
         self.data_table["SRC_PROG"][self.data_table["PROG_NORM"] > 1.0 - tol] = 0.0
         if not igniting_table:
             self.data_table["SRC_PROG"][self.data_table["PROG_NORM"] < tol] = 0.0
-
+        
         # Write the table to the HDF5 file in CharlesX format
         with h5py.File(filename, "w") as f:
             # Header group
@@ -1483,7 +1513,7 @@ class FlameletTableGenerator:
             n_tot = dims[0] * dims[1] * dims[2]
             data_raw = np.empty((n_tot * len(vars)))
             for i, var in enumerate(vars):
-                data_raw[i*n_tot : (i+1)*n_tot] = self.data_table[var].ravel(order="C")
+                data_raw[i * n_tot : (i + 1) * n_tot] = self.data_table[var].ravel(order="C")
             f.create_dataset("Data", data=data_raw)
 
             # Coordinates group
