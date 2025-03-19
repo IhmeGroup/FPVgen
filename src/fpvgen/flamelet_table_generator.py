@@ -907,47 +907,6 @@ class FlameletTableGenerator:
         self.logger.info(f"Completed {len(data)} points on the extinction branch")
         return data
 
-    def compute_perturbed_flamelets(self, dT: float = 1.0):
-        """Compute the flamelets with a perturbation in inlet temperature.
-
-        Args:
-            dT: Temperature perturbation in Kelvin
-        Returns:
-            None
-        """
-        self.solutions_perturbed = []
-        self.logger.info(f"Computing perturbed flamelets with dT = {dT:.2f} K")
-
-        self.flame.fuel_inlet.T += dT
-        self.flame.oxidizer_inlet.T += dT
-
-        for i, sol in enumerate(self.solutions):
-            mdot_fuel, mdot_ox = self._mdots_from_chi_st(sol['metadata']['chi_st'])
-            self.flame.from_array(sol["state"])
-            self.flame.fuel_inlet.mdot = mdot_fuel
-            self.flame.oxidizer_inlet.mdot = mdot_ox
-
-            try:
-                self.flame.solve(loglevel=self.solver_loglevel)
-                state_perturbed = self.flame.to_array()
-            except:
-                self.logger.error(f"Failed to compute solution at chi_st = {sol['metadata']['chi_st']:.2e} with dT = {dT:.2f}")
-                state_perturbed = sol["state"]
-            
-            self.solutions_perturbed.append({
-                "state": state_perturbed,
-                "Z": sol["Z"],
-                "chi": sol["chi"],
-                "metadata": None
-            })
-
-            # Logging after successful solution
-            self.logger.info(
-                f"Perturbed Flamelet {i} completed: T_max = {np.max(self.flame.T):.2f}, "
-                f"chi_st = {sol['metadata']['chi_st']:.4e}, "
-                f"strain_rate_nom = {self._strain_rate_nominal():.2f}"
-            )
-
     def save_solution(self, output_dir: Path, solution_index: int):
         """Save a single solution to the HDF5 files.
 
@@ -979,12 +938,10 @@ class FlameletTableGenerator:
                     "prog_def": self.prog_def,
                     "Z_st": float(self.Z_st),
                     "fuel_inlet": {
-                        "mdot": self.flame.fuel_inlet.mdot,
                         "composition": self.fuel_inlet.composition,
                         "temperature": self.fuel_inlet.temperature,
                     },
                     "oxidizer_inlet": {
-                        "mdot": self.flame.oxidizer_inlet.mdot,
                         "composition": self.oxidizer_inlet.composition,
                         "temperature": self.oxidizer_inlet.temperature,
                     },
@@ -1237,7 +1194,6 @@ class FlameletTableGenerator:
         igniting_table: bool = False,
         include_species_mass_fractions: Union[str, List[str]] = [],
         include_species_production_rates: Union[str, List[str]] = [],
-        add_activation_temperature: bool = False,
     ):
         """Assemble a Flamelet Progress Variable (FPV) table and write it in CharlesX format.
 
@@ -1248,7 +1204,6 @@ class FlameletTableGenerator:
             igniting_table: Whether to assemble an igniting table
             include_species_mass_fractions: List of species for which to include mass fractions
             include_species_production_rates: List of species for which to include production rates
-            add_activation_temperature: Whether to compute and add activation temperature to the table
         """
         # Build filename
         fuel_str = "".join([key for key in self.fuel_inlet.composition.keys()])
@@ -1294,11 +1249,8 @@ class FlameletTableGenerator:
         vars += ["ZBilger"]
         vars += include_species_mass_fractions
         vars += ["SRC_" + sp for sp in include_species_production_rates]
-        vars += ["T_PTB", "SRC_PROG_PTB", "TA"] if add_activation_temperature else []
+        vars += ["TA"]
         data_interp_Z = {var: np.zeros((dims[0], N_sol)) for var in vars}
-
-        if add_activation_temperature:
-            self.compute_perturbed_flamelets()
 
         def build_interp(Z, data):
             return interpolate.interp1d(Z, data, axis=0, bounds_error=False, fill_value=(data[0], data[-1]))
@@ -1350,7 +1302,7 @@ class FlameletTableGenerator:
             interp = build_interp(Z_i, E0_SENS_i)
             data_interp_Z["E0_SENS"][:, i] = interp(Z.grid)
 
-            # Compute derivatives via perturbation
+            # Compute derivatives via energy perturbation
             rho0deltaE = 5000.0
             deltaE = rho0deltaE / self.flame.density
             E0_p = E0_i + deltaE
@@ -1361,6 +1313,8 @@ class FlameletTableGenerator:
             MU0_m = np.zeros_like(T0_i)
             LOC0_p = np.zeros_like(T0_i)
             LOC0_m = np.zeros_like(T0_i)
+            SRC_PROG_p = np.zeros_like(T0_i)
+            SRC_PROG_m = np.zeros_like(T0_i)
             for j in range(len(self.flame.grid)):
                 # Positive perturbation
                 self.gas.TPY = self.flame.T[j], self.flame.P, self.flame.Y[:, j]
@@ -1368,6 +1322,10 @@ class FlameletTableGenerator:
                 T0_p[j] = self.gas.T
                 MU0_p[j] = self.gas.viscosity
                 LOC0_p[j] = self.gas.thermal_conductivity / self.gas.cp_mass
+                for species, value in self.prog_def.items():
+                    idx = self.gas.species_index(species)
+                    SRC_PROG_p[j] += value * self.gas.net_production_rates[idx] * self.gas.molecular_weights[idx]
+                SRC_PROG_p[j] /= self.gas.density
 
                 # Negative perturbation
                 self.gas.TPY = self.flame.T[j], self.flame.P, self.flame.Y[:, j]
@@ -1375,6 +1333,10 @@ class FlameletTableGenerator:
                 T0_m[j] = self.gas.T
                 MU0_m[j] = self.gas.viscosity
                 LOC0_m[j] = self.gas.thermal_conductivity / self.gas.cp_mass
+                for species, value in self.prog_def.items():
+                    idx = self.gas.species_index(species)
+                    SRC_PROG_m[j] += value * self.gas.net_production_rates[idx] * self.gas.molecular_weights[idx]
+                SRC_PROG_m[j] /= self.gas.density
             # Energy derivatives
             dTm = T0_i - T0_m
             dTp = T0_p - T0_i
@@ -1445,17 +1407,11 @@ class FlameletTableGenerator:
                 data_interp_Z["SRC_" + sp][:, i] = interp(Z.grid)
             
             # Activation temperature [K]
-            if add_activation_temperature:
-                self.flame.from_array(self.solutions_perturbed[i]["state"])
-                Z_ptb_i = self.flame.mixture_fraction("Bilger")
-
-                T_ptb_i = self.flame.T
-                interp = build_interp(Z_ptb_i, T_ptb_i)
-                data_interp_Z["T_PTB"][:, i] = interp(Z.grid)
-
-                SRC_PROC_ptb_i = self._compute_progress_variable_production() / self.flame.density
-                interp = build_interp(Z_ptb_i, SRC_PROC_ptb_i)
-                data_interp_Z["SRC_PROG_PTB"][:, i] = interp(Z.grid)
+            TA_i = np.log(SRC_PROG_p / SRC_PROG_m) / ((1.0 / T0_p) - (1.0 / T0_m))
+            TA_i = np.maximum(TA_i, 0.0)
+            TA_i[np.isnan(TA_i)] = 0.0
+            interp = build_interp(Z_i, TA_i)
+            data_interp_Z["TA"][:, i] = interp(Z.grid)
 
         # Sort flamelets by peak progress variable
         C_peak = np.max(data_interp_Z["PROG"], axis=0)
@@ -1513,7 +1469,6 @@ class FlameletTableGenerator:
 
         # Interpolate the data onto the Lambda coordinate
         vars_interp = vars + ["PROG_NORM"]
-        vars_interp += ["T_PTB", "SRC_PROG_PTB"] if add_activation_temperature else []
         self.data_table = {var: np.zeros((dims[0], dims[1], dims[2])) for var in vars_interp}
         for var in vars_interp:
             for i in range(dims[0]):
@@ -1527,6 +1482,10 @@ class FlameletTableGenerator:
                 data_table_i = interp(L.grid)
                 data_table_i = np.tile(data_table_i, (dims[1], 1))  # Expand to cover Q dimension
                 self.data_table[var][i, :, :] = data_table_i
+        
+        # Treat activation temperature
+        self.data_table["TA"][self.data_table["TA"] < 0.0] = 0.0
+        self.data_table["TA"][np.isnan(self.data_table["TA"])] = 0.0
 
         # Handle ignition
         tol = 1e-8
@@ -1534,22 +1493,6 @@ class FlameletTableGenerator:
         if not igniting_table:
             self.data_table["SRC_PROG"][self.data_table["PROG_NORM"] < tol] = 0.0
         
-        # Compute the activation temperature if requested
-        if add_activation_temperature:
-            T0 = self.data_table["T0"]
-            T_ptb = self.data_table["T_PTB"]
-            SRC_PROG = self.data_table["SRC_PROG"]
-            SRC_PROG_ptb = self.data_table["SRC_PROG_PTB"]
-            self.data_table["TA"] = np.log(SRC_PROG_ptb / SRC_PROG) / ((1.0 / T0) - (1.0 / T_ptb))
-            cond_invalid = np.logical_or.reduce([
-                np.isnan(self.data_table["TA"]),
-                self.data_table["TA"] < 0,
-                SRC_PROG <= 1.0e-6,
-                SRC_PROG_ptb <= 1.0e-6,
-                (SRC_PROG / SRC_PROG_ptb) <= 1.0e-8,
-                np.abs(SRC_PROG_ptb - SRC_PROG) <= 1.0e-3])
-            # self.data_table["TA"][cond_invalid] = 0.0
-
         # Write the table to the HDF5 file in CharlesX format
         with h5py.File(filename, "w") as f:
             # Header group
