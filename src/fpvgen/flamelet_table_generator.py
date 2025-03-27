@@ -577,7 +577,6 @@ class FlameletTableGenerator:
         restart_from: Optional[int] = None,
         n_max: int = 5000,
         initial_spacing: float = 0.6,
-        unstable_spacing: float = 0.95,
         temperature_increment: float = 20.0,
         max_increment: float = 100.0,
         target_delta_T_max: float = 20.0,
@@ -596,7 +595,6 @@ class FlameletTableGenerator:
             restart_from: Optional solution index to restart from if continuing a previous calculation
             n_max: Maximum number of iterations before stopping
             initial_spacing: Initial control point spacing for stable branch (0-1)
-            unstable_spacing: Control point spacing for unstable branch (0-1)
             temperature_increment: Initial temperature increment between solutions [K]
             max_increment: Maximum allowed temperature increment [K]
             target_delta_T_max: Target maximum temperature change per step [K]
@@ -659,6 +657,7 @@ class FlameletTableGenerator:
         self.logger.info("Beginning s-curve computation")
         error_count = 0
         branch_id = 1
+        spacing = initial_spacing
         for i in range(start_iteration, n_max):
             # Update flame width if we are attempting a new point
             if error_count == 0:
@@ -669,7 +668,6 @@ class FlameletTableGenerator:
             backup_state = self.flame.to_array()
 
             # Update control temperatures
-            spacing = unstable_spacing if strain_rate_max <= 0.98 * strain_rate_max_glob else initial_spacing
             control_temperature = np.min(self.flame.T) + spacing * (np.max(self.flame.T) - np.min(self.flame.T))
             self.logger.debug(f"Iteration {i}: Control temperature = {control_temperature:.2f} K")
             self.flame.set_left_control_point(control_temperature)
@@ -682,8 +680,10 @@ class FlameletTableGenerator:
                 self.flame.left_control_point_temperature < self.flame.fuel_inlet.T + T_threshold
                 or self.flame.right_control_point_temperature < self.flame.oxidizer_inlet.T + T_threshold
             ):
-                self.logger.info("SUCCESS! Control point temperature near inlet temperature.")
-                break
+                if spacing > (1 - 1e-3):
+                    self.logger.info("SUCCESS! Control point temperature near inlet temperature.")
+                    break
+                spacing = 1 - (0.7 * (1 - spacing))
 
             try:
                 self.flame.solve(loglevel=self.solver_loglevel)
