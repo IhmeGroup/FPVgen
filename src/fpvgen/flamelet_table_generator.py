@@ -123,6 +123,7 @@ class FlameletTableGenerator:
 
         # Initialization
         self.gas = ct.Solution(self.mechanism_file)
+        self.gas.transport_model = self.transport_model
         self.Z_st = self._compute_stoichiometric_mixture_fraction()
         self.logger.info("Z_st = {:.8f}".format(self.Z_st))
         self.width = 1.0  # Needed for initial flame construction but will be overridden
@@ -583,6 +584,7 @@ class FlameletTableGenerator:
         max_error_count: int = 3,
         strain_rate_tol: float = 0.10,
         write_FlameMaster: bool = False,
+        enforce_adiabaticity: bool = False,
     ) -> List[Dict]:
         """Compute upper (stable) and middle (unstable) branches of the S-curve.
 
@@ -688,6 +690,11 @@ class FlameletTableGenerator:
             try:
                 self.flame.solve(loglevel=self.solver_loglevel)
 
+                # Enforce adiabaticity if necessary
+                if enforce_adiabaticity:
+                    self.flame.two_point_control_enabled = False
+                    self.flame.solve(loglevel=self.solver_loglevel)
+
                 # Adjust temperature increment based on convergence
                 if abs(max(self.flame.T) - T_max) < 0.8 * target_delta_T_max:
                     temperature_increment = min(temperature_increment + 3, max_increment)
@@ -699,6 +706,7 @@ class FlameletTableGenerator:
                 self.logger.debug(err)
 
                 # Restore previous solution and reduce increment
+                self.flame.two_point_control_enabled = True
                 self.flame.from_array(backup_state)
                 temperature_increment = 0.7 * temperature_increment
                 error_count += 1
