@@ -39,6 +39,7 @@ strain_rate_tol = 0.01           # Minimum strain rate ratio for termination
 n_extinction_points = 10         # Number of points to solve along the extinction branch
 write_FlameMaster = true         # Write each solution in FlameMaster format
 loglevel = 0                     # Log level for the Cantera solver
+enforce_adiabaticity = false      # Enforces adiabatic flamelets which are more comparable to the traditional way of generating flamelets in composition space
 
 [tabulation]
 dims = [200, 2, 200]                      # Number of points in each dimension: [Z, Zvar, L]
