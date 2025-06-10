@@ -123,6 +123,7 @@ class FlameletTableGenerator:
 
         # Initialization
         self.gas = ct.Solution(self.mechanism_file)
+        self.gas.transport_model = self.transport_model
         self.Z_st = self._compute_stoichiometric_mixture_fraction()
         self.logger.info("Z_st = {:.8f}".format(self.Z_st))
         self.width = 1.0  # Needed for initial flame construction but will be overridden
