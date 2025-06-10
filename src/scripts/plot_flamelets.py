@@ -49,6 +49,10 @@ def main():
         logger.info("Generating temperature profiles plot")
         generator.plot_temperature_profiles(output_file=output_dir / "temperature_profiles.png")
 
+        # Generate progress variable profiles plot
+        logger.info("Generating progress variable profiles plot")
+        generator.plot_progress_variable_profiles(output_file=output_dir / "progress_variable_profiles.png")
+
         # Generate strain vs chi_st plot
         logger.info("Generating strain vs chi_st plot")
         generator.plot_strain_chi_st(strain_rate_type="max", output_file=output_dir / "strain_max_chi_st.png")

@@ -221,6 +221,10 @@ def main():
                 output_file=output_dir / "temperature_profiles.png",
                 **config["plotting"]["profiles"],
             )
+            generator.plot_progress_variable_profiles(
+                output_file=output_dir / "progress_variable_profiles.png",
+                **config["plotting"]["profiles"],
+            )
             generator.plot_strain_chi_st(strain_rate_type="max", output_file=output_dir / "strain_max_chi_st.png")
             generator.plot_strain_chi_st(strain_rate_type="nom", output_file=output_dir / "strain_nom_chi_st.png")
             generator.plot_table(

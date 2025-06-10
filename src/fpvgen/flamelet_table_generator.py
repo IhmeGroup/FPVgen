@@ -1651,6 +1651,67 @@ class FlameletTableGenerator:
 
         return fig, ax
 
+    def plot_progress_variable_profiles(
+        self,
+        output_file: Optional[str] = None,
+        num_profiles: Optional[int] = None,
+        colormap: str = "viridis",
+    ):
+        """Plot progress variable vs mixture fraction profiles for all solutions.
+
+        Creates a plot showing progress variable profiles colored by scalar dissipation rate.
+
+        Args:
+            output_file: Optional file path to save the figure
+            num_profiles: Optional number of profiles to plot (will sample evenly)
+            colormap: Name of colormap to use for the profiles
+
+        Returns:
+            Tuple[Figure, Axes]: Matplotlib figure and axes objects
+        """
+        import matplotlib.pyplot as plt
+        from matplotlib.colors import LogNorm
+
+        plt.rcParams.update(pyplot_params)
+
+        # Select which solutions to plot
+        if num_profiles is None:
+            solutions_to_plot = self.solutions
+        else:
+            indices = np.linspace(0, len(self.solutions) - 1, num_profiles, dtype=int)
+            solutions_to_plot = [self.solutions[i] for i in indices]
+
+        fig, ax = plt.subplots()
+
+        # Create log-scaled colormap based on chi_st values
+        chi_st_values = [sol["metadata"]["chi_st"] for sol in solutions_to_plot]
+        norm = LogNorm(vmin=min(chi_st_values), vmax=max(chi_st_values))
+        cmap = plt.get_cmap(colormap)
+
+        # Plot each profile
+        for solution in solutions_to_plot:
+            self.flame.from_array(solution["state"])
+            C = self._compute_progress_variable()
+            color = cmap(norm(solution["metadata"]["chi_st"]))
+            ax.plot(solution["Z"], C, color=color, alpha=0.7)
+
+        # Add colorbar with log scale
+        sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
+        cbar = fig.colorbar(sm, ax=ax)
+        cbar.set_label(r"$\chi_{st}$ [1/s]")
+
+        # Add stoichiometric mixture fraction line
+        ax.axvline(self.Z_st, color="k", linestyle="--", alpha=0.3)
+
+        ax.set_xlabel(r"$Z$ [-]")
+        ax.set_ylabel(r"$C$ [-]")
+        ax.grid(True, alpha=0.2)
+
+        if output_file:
+            fig.savefig(output_file, bbox_inches="tight", dpi=300)
+
+        return fig, ax
+
     def plot_current_state(self, output_file: Optional[str] = None):
         """Plot the current state of the flame in physical space.
 
