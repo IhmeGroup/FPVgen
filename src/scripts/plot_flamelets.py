@@ -43,16 +43,16 @@ def main():
 
         # Generate S-curve plot
         logger.info("Generating S-curve plot")
-        generator.plot_s_curve(output_file=output_dir / "s_curve.png")
+        generator.plot_s_curve(output_dir=output_dir)
 
         # Generate temperature profiles plot
         logger.info("Generating temperature profiles plot")
-        generator.plot_temperature_profiles(output_file=output_dir / "temperature_profiles.png")
+        generator.plot_temperature_profiles(output_dir=output_dir / "temperature_profiles.png")
 
         # Generate strain vs chi_st plot
         logger.info("Generating strain vs chi_st plot")
-        generator.plot_strain_chi_st(strain_rate_type="max", output_file=output_dir / "strain_max_chi_st.png")
-        generator.plot_strain_chi_st(strain_rate_type="nom", output_file=output_dir / "strain_nom_chi_st.png")
+        generator.plot_strain_chi_st(strain_rate_type="max", output_dir=output_dir / "strain_max_chi_st.png")
+        generator.plot_strain_chi_st(strain_rate_type="nom", output_dir=output_dir / "strain_nom_chi_st.png")
 
         logger.info("Plot generation completed successfully")
         return 0

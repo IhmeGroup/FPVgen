@@ -129,6 +129,15 @@ def create_generator(config: dict) -> FlameletTableGenerator:
         initial_chi_st=config["conditions"].get("initial_chi_st"),
         solver_loglevel=config["solver"].get("loglevel"),
         strain_chi_st_model_param_file=config["solver"].get("strain_chi_st_model_param_file"),
+        enthalpy_change = config["conditions"].get("enthalpy_change"),
+        n_enthalpy_flamelets = config["conditions"].get("n_enthalpy_flamelets"),
+        diluent = config["conditions"].get("diluent"),
+        dilute_fuel_or_oxidizer = config["conditions"].get("dilute_fuel_or_oxidizer"),
+        set_diluent_algo = config["conditions"].get("set_diluent_algo"),
+        max_diluent_mole_fraction = config["conditions"].get("max_diluent_mole_fraction"),
+        diluent_temperature = config["conditions"].get("diluent_temperature"),
+        diluent_phi = config["conditions"].get("diluent_phi"),
+        diluent_init_T = config["conditions"].get("diluent_init_T")
     )
 
 
@@ -177,7 +186,7 @@ def main():
             logger.info("Restarting from previous solution")
             restart_config = config["restart"]
             solutions_file = Path(restart_config["solutions_file"])
-            generator = FlameletTableGenerator.load_solutions(solutions_file)
+            generator = FlameletTableGenerator.load_solutions(solutions_file, restart_config=restart_config)
 
             # If output_dir is different from solutions_file location, copy existing solutions
             if output_dir != solutions_file.parent:
@@ -214,15 +223,15 @@ def main():
         if create_plots:
             logger.info("Creating visualization plots")
             generator.plot_s_curve(
-                output_file=output_dir / "s_curve.png",
+                output_dir=output_dir,
                 **config["plotting"]["s_curve"],
             )
             generator.plot_temperature_profiles(
-                output_file=output_dir / "temperature_profiles.png",
+                output_dir=output_dir,
                 **config["plotting"]["profiles"],
             )
-            generator.plot_strain_chi_st(strain_rate_type="max", output_file=output_dir / "strain_max_chi_st.png")
-            generator.plot_strain_chi_st(strain_rate_type="nom", output_file=output_dir / "strain_nom_chi_st.png")
+            generator.plot_strain_chi_st(strain_rate_type="max", output_dir=output_dir)
+            generator.plot_strain_chi_st(strain_rate_type="nom", output_dir=output_dir)
             generator.plot_table(
                 output_prefix=output_dir / "table",
                 **config["plotting"]["table"],
