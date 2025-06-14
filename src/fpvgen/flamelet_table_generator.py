@@ -593,8 +593,8 @@ class FlameletTableGenerator:
             self.flame.left_control_point_temperature -= delta_T
             self.flame.right_control_point_temperature -= delta_T
         elif delta_T_type == "relative":
-            self.flame.left_control_point_temperature -= self.flame.left_control_point_temperature*delta_T/100
-            self.flame.right_control_point_temperature -= self.flame.right_control_point_temperature*delta_T/100
+            self.flame.left_control_point_temperature -= self.flame.left_control_point_temperature * delta_T
+            self.flame.right_control_point_temperature -= self.flame.right_control_point_temperature * delta_T
 
     def compute_s_curve(
         self,
