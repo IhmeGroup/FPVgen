@@ -1499,6 +1499,7 @@ class FlameletTableGenerator:
             # Header group
             header = f.create_group("Header")
             doubles = header.create_group("Doubles")
+            doubles.attrs["Number of doubles"] = 2
             double_0 = doubles.create_dataset("Double_0", data=["Reference Pressure"])
             double_0.attrs["Value"] = [self.pressure]
             double_1 = doubles.create_dataset("Double_1", data=["Version"])
@@ -1506,6 +1507,7 @@ class FlameletTableGenerator:
             header.create_dataset("Number of dimensions", data=[3])
             header.create_dataset("Number of variables", data=[len(vars)])
             strings = header.create_group("Strings")
+            strings.attrs["Number of strings"] = 2
             strings.create_dataset("String_0", data=["Combustion Model", "FPVA"])
             strings.create_dataset("String_1", data=["Table Type", "COEFF"])
             header.create_dataset("Variable Names", data=vars)
