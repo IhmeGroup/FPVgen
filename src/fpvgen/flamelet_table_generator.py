@@ -1496,15 +1496,19 @@ class FlameletTableGenerator:
         
         # Write the table to the HDF5 file in CharlesX format
         with h5py.File(filename, "w") as f:
-            # Create variable-length string dtype
-            str_dtype = h5py.special_dtype(vlen=str)
+            # Create variable-length string dtype with ASCII encoding and space padding
+            str_type_id = h5py.h5t.TypeID.copy(h5py.h5t.C_S1)
+            str_type_id.set_size(h5py.h5t.VARIABLE)
+            str_type_id.set_cset(h5py.h5t.CSET_ASCII)
+            str_type_id.set_strpad(h5py.h5t.STR_SPACEPAD)
+            str_dtype = h5py.Datatype(str_type_id)
             
             # Header group
             header = f.create_group("Header")
-            
+
             # Doubles subgroup
             doubles = header.create_group("Doubles")
-            doubles.attrs["Number of doubles"] = np.int32(2)
+            doubles.attrs["Number of doubles"] = [np.int32(2)]
             double_0 = doubles.create_dataset("Double_0", data=["Reference Pressure"], dtype=str_dtype)
             double_0.attrs["Value"] = [np.float64(self.pressure)]
             double_1 = doubles.create_dataset("Double_1", data=["Version"], dtype=str_dtype)
@@ -1512,7 +1516,7 @@ class FlameletTableGenerator:
             
             # Strings subgroup
             strings = header.create_group("Strings")
-            strings.attrs["Number of strings"] = np.int32(2)
+            strings.attrs["Number of strings"] = [np.int32(2)]
             strings.create_dataset("String_0", data=["Combustion Model", "FPVA"], dtype=str_dtype)
             strings.create_dataset("String_1", data=["Table Type", "COEFF"], dtype=str_dtype)
             
