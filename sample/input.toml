@@ -3,28 +3,29 @@
 
 #[restart]
 #solutions_file = "flamelet_results/solutions.h5"
-#h_id_initial = 1
-#solution_index = 3280
+#h_id_initial = 0                                   # Index of enthalpy flamelet. Default is 0 (adiabatic flamelet)
+#solution_index = 0                                 # Starts at 0
 
 [mechanism]
-file = "RFFCM.yaml" # "NH3_stagni_2302_noARHE_N2last.yaml"                                      # Path to mechanism file
+file = "gri30.yaml"                                      # Path to mechanism file
 transport_model = "mixture-averaged"                     # Transport model: "unity-Lewis-number", "mixture-averaged", or "multicomponent"
 prog_def = { CO = 1.0, H2 = 1.0, CO2 = 1.0, H2O = 1.0 }  # Progress variable definition
-# prog_def = { H2O = 1.0 }
 
 [conditions]
 pressure = 101325.0                 # Operating pressure in Pa
-initial_chi_st = 1.0e-4             # Initial target scalar dissipation rate
+initial_chi_st = 1.0e-5             # Initial target scalar dissipation rate
 enthalpy_change = "diluent"         # Optional: Enthalpy change method. Only "diluent" is implemented.
-n_enthalpy_flamelets = 2            # Number of stable flamelets to begin the enthalpy change-flamelet calculations with. Minimum is 1 (no enthalpy change flamelet)
+n_enthalpy_flamelets = 1            # Number of stable flamelets to begin the enthalpy change-flamelet calculations with. Minimum is 1 (no enthalpy change flamelet)
 diluent = "products"                # Optional: The composition of the diluent (should be a string). Put "products" for the equilibrium product of perfectly mixed fuel and oxidizer
 dilute_fuel_or_oxidizer = "fuel"    # Optional: If diluent is the method to cause enthalpy change, choose to dilute the fuel or oxidizer stream
-max_diluent_mole_fraction = 0.2     # Optional: Maximum mole fraction of diluent
+set_diluent_algo = "max"            # Optional: Method to set diluent amounts. Simplest is 'fixed', where it will make a linspace between 0 and max_diluent_mole_fraction. "max" is also implemented, where it calculates the maximum diluent amount in intervals of 0.1 until Cantera fails
+#max_diluent_mole_fraction = 0.8     # Optional: Maximum mole fraction of diluent, used for 'fixed' set_diluent_algo
 diluent_temperature = 1000          # Optional: Temperature of the diluent
+diluent_phi = 0.8                   # Optional: Equivalence ratio of the diluent (used to calculate the "products" option for diluent)
+diluent_init_T = 300                # Optional: Initial temperature of the diluent (used to calculate the "products" option for diluent)
 
 [fuel_inlet]
-# composition = { NH3 = 0.4, H2 = 0.45, N2 = 0.15 }
-composition = { CH4 = 1.0 }  
+composition = { CH4 = 1.0 }
 temperature = 300.0          # Temperature in K
 
 [oxidizer_inlet]
@@ -32,25 +33,33 @@ composition = { O2 = 0.21, N2 = 0.79 }  # Air
 temperature = 300.0                     # Temperature in K
 
 [solver]
-output_dir = "flamelet_results"  # Output directory
-create_plots = true              # Whether to create visualization plots
-width_ratio = 10.0               # Ratio of domain width to flame thickness
-width_change_enable = false      # Enable domain width changes
-width_change_max = 0.1           # Maximum domain width change
-width_change_min = 0.05          # Minimum domain width change
-n_max = 5                     # Maximum number of iterations
-loc_algo_left = "spacing"   # Algorithm to use to calculate where to put two-point control in the domain. "spacing", "max_dTdx" and "next_to_max" implemented
-loc_algo_right = "spacing"   # Algorithm to use to calculate where to put two-point control in the domain. "spacing", "max_dTdx" and "next_to_max" implemented
-initial_spacing = 0.7           # Initial control point spacing if using "spacing" algorithm for two-point control
-delta_T_type = "absolute"      # "absolute" [K] or "relative" [%]
-delta_T = 5     # Initial temperature delta_T
-max_delta_T = 10            # Maximum temperature delta_T
-target_delta_T_max = 5        # Target maximum temperature change
-max_error_count = 3              # Maximum consecutive solver errors
-strain_rate_tol = 0.01           # Minimum strain rate ratio for termination
-n_extinction_points = 10         # Number of points to solve along the extinction branch
-write_FlameMaster = true         # Write each solution in FlameMaster format
-loglevel = 0                     # Log level for the Cantera solver
+output_dir = "flamelet_results"     # Output directory
+create_plots = true                 # Whether to create visualization plots
+width_ratio = 10.0                  # Ratio of domain width to flame thickness
+width_change_enable = false         # Enable domain width changes
+width_change_max = 0.1              # Maximum domain width change
+width_change_min = 0.05             # Minimum domain width change
+n_max = 5000                        # Maximum number of iterations
+loc_algo_left = "spacing"           # Algorithm to use to calculate where to put two-point control in the domain. "spacing", "max_dTdx" and "next_to_max" implemented
+#loc_algo_right = "next_to_max"      # Algorithm to use to calculate where to put two-point control in the domain. "spacing", "max_dTdx" and "next_to_max" implemented
+loc_algo_right = "spacing"         # Algorithm to use to calculate where to put two-point control in the domain. "spacing", "max_dTdx" and "next_to_max" implemented
+initial_spacing = 0.6               # Initial control point spacing if using "spacing" algorithm for two-point control
+# the temperature control options below should be used to traverse the upper stable branch
+delta_T_type = "absolute"           # "absolute" [K] or "relative" [%]
+delta_T = 5                         # Initial temperature delta_T
+max_delta_T = 10                    # Maximum temperature delta_T
+target_delta_T_max = 7              # Target maximum temperature change
+# The temperature control options below should be used to traverse the unstable branch. Uncomment to use after a restart
+#delta_T_type = "relative"           # "absolute" [K] or "relative" [%]
+#delta_T = 0.5                       # Initial temperature delta_T
+#max_delta_T = 1                     # Maximum temperature delta_T
+#target_delta_T_max = 0.8            # Target maximum temperature change
+max_error_count = 3                 # Maximum consecutive solver errors
+strain_rate_tol = 0.01              # Minimum strain rate ratio for termination
+n_extinction_points = 10            # Number of points to solve along the extinction branch
+write_FlameMaster = true            # Write each solution in FlameMaster format
+loglevel = 0                        # Log level for the Cantera solver
+#move_on_to_next_h = true           # Moves on to the next enthalpy flamelet, useful when restarting
 
 [tabulation]
 dims = [200, 2, 200]                      # Number of points in each dimension: [Z, Zvar, L]. If there are enthalpy effects, an additional 4th dimension is added with size n_enthalpy_flamelets
@@ -68,5 +77,5 @@ y_quantity = "T_max"  # y-axis quantity: "T_max" or "T_st"
 colormap = "viridis"  # Colormap for temperature profiles
 
 [plotting.table]
-vars = ["T0", "SRC_PROG", "OH", "CO"]  # Variables to plot, or "all"
+vars = ["T0", "E0", "E0_CHEM", "E0_SENS", "HeatRelease", "SRC_PROG", "OH", "CO"]  # Variables to plot, or "all"
 colormap = "viridis"                   # Colormap for table plots
