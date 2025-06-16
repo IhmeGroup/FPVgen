@@ -726,6 +726,9 @@ class FlameletTableGenerator:
             self.logger.info("Computing the initial solution")
             self.flame.solve(loglevel=self.solver_loglevel, auto=True)
             T_max = np.max(self.flame.T)
+            Z = self.flame.mixture_fraction("Bilger")
+            chi, chi_st = self._compute_scalar_dissipation(Z)
+            chi_st_max_glob = chi_st
             strain_rate_max = self.flame.strain_rate("max")
             strain_rate_max_glob = strain_rate_max
             data = []
@@ -735,6 +738,7 @@ class FlameletTableGenerator:
         error_count = 0
         branch_id = 1
         spacing = initial_spacing
+        chi_increasing = True
         for i in range(start_iteration, n_max):
             # Update flame width if we are attempting a new point
             if error_count == 0:
@@ -800,6 +804,7 @@ class FlameletTableGenerator:
             # Compute postprocessing data
             Z = self.flame.mixture_fraction("Bilger")
             chi, chi_st = self._compute_scalar_dissipation(Z)
+            chi_st_max_glob = max(chi_st_max_glob, chi_st)
             interp_T = interpolate.interp1d(Z, self.flame.T)
             T_st = float(interp_T(self.Z_st))
             T_max = max(self.flame.T)
@@ -807,9 +812,17 @@ class FlameletTableGenerator:
             strain_rate_max = self.flame.strain_rate("max")
             strain_rate_nom = self._strain_rate_nominal()
             strain_rate_max_glob = max(strain_rate_max, strain_rate_max_glob)
-            if len(self.solutions) > 0 and chi_st < self.solutions[0]["metadata"]["chi_st"]:
-                branch_id += 1
+            if len(self.solutions) > 0 and chi_increasing and chi_st < chi_st_max_glob:
                 self.logger.info(f"Turning point encountered")
+                branch_id += 1
+                chi_increasing = False
+                loc_algo_right = "next_to_max"
+                delta_T_type = "relative"
+                delta_T = 0.005
+            if len(self.solutions) > 0 and not chi_increasing and chi_st > chi_st_max_glob:
+                self.logger.info(f"Turning point encountered")
+                branch_id += 1
+                chi_increasing = True
             step_data = {
                 "T_max": T_max,
                 "T_st": T_st,
