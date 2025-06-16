@@ -730,7 +730,8 @@ class FlameletTableGenerator:
             chi, chi_st = self._compute_scalar_dissipation(Z)
             chi_st_max_glob = chi_st
             strain_rate_max = self.flame.strain_rate("max")
-            strain_rate_max_glob = strain_rate_max
+            strain_rate_max_max = strain_rate_max
+            strain_rate_max_min = strain_rate_max
             data = []
             start_iteration = 0
 
@@ -738,7 +739,7 @@ class FlameletTableGenerator:
         error_count = 0
         branch_id = 1
         spacing = initial_spacing
-        chi_increasing = True
+        strain_rate_increasing = True
         for i in range(start_iteration, n_max):
             # Update flame width if we are attempting a new point
             if error_count == 0:
@@ -788,10 +789,10 @@ class FlameletTableGenerator:
                 delta_T = 0.7 * delta_T
                 error_count += 1
                 if error_count > max_error_count:
-                    if strain_rate_max / strain_rate_max_glob < strain_rate_tol:
+                    if strain_rate_max / strain_rate_max_max < strain_rate_tol:
                         self.logger.info(
                             "SUCCESS! Traversed unstable branch down to "
-                            f"{100 * strain_rate_max / strain_rate_max_glob:.4f}% of the maximum strain rate."
+                            f"{100 * strain_rate_max / strain_rate_max_max:.4f}% of the maximum strain rate."
                         )
                     else:
                         self.logger.warning(f"FAILURE! Stopping after {error_count} successive solver errors.")
@@ -811,18 +812,19 @@ class FlameletTableGenerator:
             width = self._measure_flame_thickness()
             strain_rate_max = self.flame.strain_rate("max")
             strain_rate_nom = self._strain_rate_nominal()
-            strain_rate_max_glob = max(strain_rate_max, strain_rate_max_glob)
-            if len(self.solutions) > 0 and chi_increasing and chi_st < chi_st_max_glob:
+            strain_rate_max_max = max(strain_rate_max, strain_rate_max_max)
+            strain_rate_max_min = min(strain_rate_max, strain_rate_max_min)
+            if len(self.solutions) > 0 and strain_rate_increasing and strain_rate_max < strain_rate_max_max:
                 self.logger.info(f"Turning point encountered")
                 branch_id += 1
-                chi_increasing = False
+                strain_rate_increasing = False
                 loc_algo_right = "next_to_max"
                 delta_T_type = "relative"
                 delta_T = 0.005
-            if len(self.solutions) > 0 and not chi_increasing and chi_st > chi_st_max_glob:
+            if len(self.solutions) > 0 and not strain_rate_increasing and strain_rate_max > strain_rate_max_min:
                 self.logger.info(f"Turning point encountered")
                 branch_id += 1
-                chi_increasing = True
+                strain_rate_increasing = True
             step_data = {
                 "T_max": T_max,
                 "T_st": T_st,
