@@ -1234,7 +1234,7 @@ class FlameletTableGenerator:
             "ROM",
             "T0",
             "E0",
-            "E0_CHEM",
+            "E_CHEM",
             "E0_SENS",
             "GAMMA0",
             "AGAMMA",
@@ -1285,21 +1285,21 @@ class FlameletTableGenerator:
             interp = build_interp(Z_i, E0_i)
             data_interp_Z["E0"][:, i] = interp(Z.grid)
 
-            # E0_CHEM [J/kg]
-            E0_CHEM_i = np.zeros_like(self.flame.grid)
+            # E_CHEM [J/kg]
+            E_CHEM_i = np.zeros_like(self.flame.grid)
             for j in range(len(self.flame.grid)):
                 self.gas.TPY = 298.15, self.flame.P, self.flame.Y[:, j]
-                E0_CHEM_i[j] = (
+                E_CHEM_i[j] = (
                     np.dot(self.gas.standard_enthalpies_RT, self.gas.X)
                     * ct.gas_constant
                     * self.gas.T
                     / self.gas.mean_molecular_weight
                 )
-            interp = build_interp(Z_i, E0_CHEM_i)
-            data_interp_Z["E0_CHEM"][:, i] = interp(Z.grid)
+            interp = build_interp(Z_i, E_CHEM_i)
+            data_interp_Z["E_CHEM"][:, i] = interp(Z.grid)
 
             # E0_SENS [J/kg]
-            E0_SENS_i = E0_i - E0_CHEM_i
+            E0_SENS_i = E0_i - E_CHEM_i
             interp = build_interp(Z_i, E0_SENS_i)
             data_interp_Z["E0_SENS"][:, i] = interp(Z.grid)
 
