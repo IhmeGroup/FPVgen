@@ -1496,26 +1496,41 @@ class FlameletTableGenerator:
         
         # Write the table to the HDF5 file in CharlesX format
         with h5py.File(filename, "w") as f:
+            # Create variable-length string dtype with ASCII encoding and space padding
+            str_type_id = h5py.h5t.TypeID.copy(h5py.h5t.C_S1)
+            str_type_id.set_size(h5py.h5t.VARIABLE)
+            str_type_id.set_cset(h5py.h5t.CSET_ASCII)
+            str_type_id.set_strpad(h5py.h5t.STR_SPACEPAD)
+            str_dtype = h5py.Datatype(str_type_id)
+            
             # Header group
             header = f.create_group("Header")
+
+            # Doubles subgroup
             doubles = header.create_group("Doubles")
-            double_0 = doubles.create_dataset("Double_0", data=["Reference Pressure"])
-            double_0.attrs["Value"] = [self.pressure]
-            double_1 = doubles.create_dataset("Double_1", data=["Version"])
-            double_1.attrs["Value"] = [0.2]
-            header.create_dataset("Number of dimensions", data=[3])
-            header.create_dataset("Number of variables", data=[len(vars)])
+            doubles.attrs["Number of doubles"] = [np.int32(2)]
+            double_0 = doubles.create_dataset("Double_0", data=["Reference Pressure"], dtype=str_dtype)
+            double_0.attrs["Value"] = [np.float64(self.pressure)]
+            double_1 = doubles.create_dataset("Double_1", data=["Version"], dtype=str_dtype)
+            double_1.attrs["Value"] = [np.float64(0.2)]
+            
+            # Strings subgroup
             strings = header.create_group("Strings")
-            strings.create_dataset("String_0", data=["Combustion Model", "FPVA"])
-            strings.create_dataset("String_1", data=["Table Type", "COEFF"])
-            header.create_dataset("Variable Names", data=vars)
+            strings.attrs["Number of strings"] = [np.int32(2)]
+            strings.create_dataset("String_0", data=["Combustion Model", "FPVA"], dtype=str_dtype)
+            strings.create_dataset("String_1", data=["Table Type", "COEFF"], dtype=str_dtype)
+            
+            # Header datasets
+            header.create_dataset("Number of dimensions", data=[3], dtype=np.int32)
+            header.create_dataset("Number of variables", data=[len(vars)], dtype=np.int32)
+            header.create_dataset("Variable Names", data=vars, dtype=str_dtype)
 
             # Data dataset
             n_tot = dims[0] * dims[1] * dims[2]
-            data_raw = np.empty((n_tot * len(vars)))
+            data_raw = np.empty((n_tot * len(vars)), dtype=np.float32)
             for i, var in enumerate(vars):
                 data_raw[i * n_tot : (i + 1) * n_tot] = self.data_table[var].ravel(order="C")
-            f.create_dataset("Data", data=data_raw)
+            f.create_dataset("Data", data=data_raw, dtype=np.float32)
 
             # Coordinates group
             coords = f.create_group("Coordinates")
