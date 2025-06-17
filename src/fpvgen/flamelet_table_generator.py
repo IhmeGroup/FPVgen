@@ -364,7 +364,11 @@ class FlameletTableGenerator:
         v_ox = self.flame.oxidizer_inlet.mdot / rho_ox
         return 2 * (v_fuel + v_ox) / self.width
 
-    def _initialize_flame(self, chi_st: float, grid: Optional[np.ndarray] = None):
+    def _initialize_flame(
+        self,
+        chi_st: float,
+        grid: Optional[np.ndarray] = None
+    ) -> None:
         """Set up the initial counterflow diffusion flame configuration.
 
         Args:
@@ -396,12 +400,12 @@ class FlameletTableGenerator:
         # Set refinement parameters
         self.flame.set_refine_criteria(ratio=4.0, slope=0.1, curve=0.2, prune=0.05)
 
-    def _enable_two_point_control(self):
+    def _enable_two_point_control(self) -> None:
         self.flame.two_point_control_enabled = True
         self.flame.flame.set_bounds(spread_rate=(-1e-5, 1e20))
         self.flame.max_time_step_count = 100
 
-    def _update_flame_width(self, solve: Optional[bool] = True):
+    def _update_flame_width(self, solve: Optional[bool] = True) -> None:
         """Update the flame width and reinitialize the flame object.
 
         Args:
@@ -908,7 +912,7 @@ class FlameletTableGenerator:
         self.logger.info(f"Completed {len(data)} points on the extinction branch")
         return data
 
-    def save_solution(self, output_dir: Path, solution_index: int):
+    def save_solution(self, output_dir: Path, solution_index: int) -> None:
         """Save a single solution to the HDF5 files.
 
         Saves both the flame profiles and associated metadata for a single solution.
@@ -979,7 +983,7 @@ class FlameletTableGenerator:
         # Write flame profile
         solution["state"].save(solutions_file, name=state_name, overwrite=True)
 
-    def save_all_solutions(self, output_dir: Path):
+    def save_all_solutions(self, output_dir: Path) -> None:
         """Save all computed solutions to HDF5 files.
 
         Args:
@@ -1057,7 +1061,7 @@ class FlameletTableGenerator:
         self,
         output_dir: Path,
         reinterp_Z: bool = True,
-    ):
+    ) -> None:
         """Write FlameMaster output files for a single solution.
 
         Args:
@@ -1195,7 +1199,8 @@ class FlameletTableGenerator:
         igniting_table: bool = False,
         include_species_mass_fractions: Union[str, List[str]] = [],
         include_species_production_rates: Union[str, List[str]] = [],
-    ):
+        include_energy_enthalpy_components: bool = False,
+    ) -> None:
         """Assemble a Flamelet Progress Variable (FPV) table and write it in CharlesX format.
 
         Args:
@@ -1205,6 +1210,7 @@ class FlameletTableGenerator:
             igniting_table: Whether to assemble an igniting table
             include_species_mass_fractions: List of species for which to include mass fractions
             include_species_production_rates: List of species for which to include production rates
+            include_energy_enthalpy_components: Whether to include energy and enthalpy components
         """
         # Build filename
         fuel_str = "".join([key for key in self.fuel_inlet.composition.keys()])
@@ -1234,8 +1240,6 @@ class FlameletTableGenerator:
             "ROM",
             "T0",
             "E0",
-            "E_CHEM",
-            "E0_SENS",
             "GAMMA0",
             "AGAMMA",
             "MU0",
@@ -1250,6 +1254,8 @@ class FlameletTableGenerator:
         vars += ["ZBilger"]
         vars += include_species_mass_fractions
         vars += ["SRC_" + sp for sp in include_species_production_rates]
+        if include_energy_enthalpy_components:
+            vars += ["E_CHEM", "E0_SENS", "H0", "H0_SENS"]
         vars += ["TA"]
         data_interp_Z = {var: np.zeros((dims[0], N_sol)) for var in vars}
 
@@ -1285,23 +1291,7 @@ class FlameletTableGenerator:
             interp = build_interp(Z_i, E0_i)
             data_interp_Z["E0"][:, i] = interp(Z.grid)
 
-            # E_CHEM [J/kg]
-            E_CHEM_i = np.zeros_like(self.flame.grid)
-            for j in range(len(self.flame.grid)):
-                self.gas.TPY = 298.15, self.flame.P, self.flame.Y[:, j]
-                E_CHEM_i[j] = (
-                    np.dot(self.gas.standard_enthalpies_RT, self.gas.X)
-                    * ct.gas_constant
-                    * self.gas.T
-                    / self.gas.mean_molecular_weight
-                )
-            interp = build_interp(Z_i, E_CHEM_i)
-            data_interp_Z["E_CHEM"][:, i] = interp(Z.grid)
 
-            # E0_SENS [J/kg]
-            E0_SENS_i = E0_i - E_CHEM_i
-            interp = build_interp(Z_i, E0_SENS_i)
-            data_interp_Z["E0_SENS"][:, i] = interp(Z.grid)
 
             # Compute derivatives via energy perturbation
             rho0deltaE = 5000.0
@@ -1406,6 +1396,35 @@ class FlameletTableGenerator:
                 SRC_i = self.flame.net_production_rates[k, :] * self.gas.molecular_weights[k] / self.flame.density
                 interp = build_interp(Z_i, SRC_i)
                 data_interp_Z["SRC_" + sp][:, i] = interp(Z.grid)
+            
+            if include_energy_enthalpy_components:
+                # E_CHEM [J/kg]
+                E_CHEM_i = np.zeros_like(self.flame.grid)
+                for j in range(len(self.flame.grid)):
+                    self.gas.TPY = 298.15, self.flame.P, self.flame.Y[:, j]
+                    E_CHEM_i[j] = (
+                        np.dot(self.gas.standard_enthalpies_RT, self.gas.X)
+                        * ct.gas_constant
+                        * self.gas.T
+                        / self.gas.mean_molecular_weight
+                    )
+                interp = build_interp(Z_i, E_CHEM_i)
+                data_interp_Z["E_CHEM"][:, i] = interp(Z.grid)
+
+                # E0_SENS [J/kg]
+                E0_SENS_i = E0_i - E_CHEM_i
+                interp = build_interp(Z_i, E0_SENS_i)
+                data_interp_Z["E0_SENS"][:, i] = interp(Z.grid)
+
+                # H0 [J/kg]
+                H0_i = self.flame.enthalpy_mass
+                interp = build_interp(Z_i, H0_i)
+                data_interp_Z["H0"][:, i] = interp(Z.grid)
+
+                # H0_SENS [J/kg]
+                H0_SENS_i = H0_i - E_CHEM_i
+                interp = build_interp(Z_i, H0_SENS_i)
+                data_interp_Z["H0_SENS"][:, i] = interp(Z.grid)
             
             # Activation temperature [K]
             TA_i = np.log(SRC_PROG_p / SRC_PROG_m) / ((1.0 / T0_p) - (1.0 / T0_m))
