@@ -167,6 +167,39 @@ class FlameletTableGenerator:
             basis="mole",
             element="Bilger",
         )
+    
+    def _compute_mixture_fraction_point(self, X: np.ndarray) -> float:
+        """Compute the mixture fraction of a point using Bilger's definition.
+
+        Args:
+            X: Mole fraction of species at a point.
+
+        Returns:
+            float: Mixture fraction
+        """
+        self.gas.X = X
+        return self.gas.mixture_fraction(
+            fuel=self.fuel_inlet.composition,
+            oxidizer=self.oxidizer_inlet.composition,
+            basis="mole",
+            element="Bilger",
+        )
+    
+    def _compute_mixture_fraction(self, X_array: np.ndarray) -> np.ndarray:
+        """Compute the mixture fraction using Bilger's definition.
+        The reason we need this function instead of just using flame.mixture_fraction is because the flame inlets can be different from the actual inlet composition due to dilution.
+
+        Args:
+            X_array: Mole fraction of species at a point.
+
+        Returns:
+            np.ndarray: Mixture fraction
+        """
+        mixture_fraction = []
+        for i,_ in enumerate(range(np.shape(X_array)[1])):
+            mixture_fraction.append(self._compute_mixture_fraction_point(X_array[:,i]))
+        
+        return np.array(mixture_fraction)
 
     def _compute_progress_variable(self) -> np.ndarray:
         """Compute the progress variable field for the current flame solution.
@@ -192,11 +225,11 @@ class FlameletTableGenerator:
             prog_var_prod += value * self.flame.net_production_rates[idx, :] * self.gas.molecular_weights[idx]
         return prog_var_prod
 
-    def _compute_scalar_dissipation(self, mixture_fraction: Optional[np.ndarray] = None) -> Tuple[np.ndarray, float]:
+    def _compute_scalar_dissipation(self, mixture_fraction: np.ndarray = None) -> Tuple[np.ndarray, float]:
         """Compute scalar dissipation rate field and its stoichiometric value.
 
         Args:
-            mixture_fraction: Optional pre-computed mixture fraction field.
+            mixture_fraction: Mixture fraction field.
                 If None, will be computed.
 
         Returns:
@@ -204,8 +237,6 @@ class FlameletTableGenerator:
                 - np.ndarray: Scalar dissipation rate at each grid point
                 - float: Scalar dissipation rate at stoichiometric mixture fraction
         """
-        if mixture_fraction is None:
-            mixture_fraction = self.flame.mixture_fraction("Bilger")
 
         # Compute mixture fraction gradient
         dZ_dx = np.gradient(mixture_fraction, self.flame.grid)
@@ -229,7 +260,7 @@ class FlameletTableGenerator:
         Returns:
             float: Mixture fraction at the flame location
         """
-        Z = self.flame.mixture_fraction("Bilger")
+        Z = self._compute_mixture_fraction(self.flame.X)
         T = self.flame.T
         return Z[np.argmax(T)]
 
@@ -239,7 +270,7 @@ class FlameletTableGenerator:
         Returns:
             np.ndarray: Derivative of ln(Cp) with respect to Z
         """
-        Z = self.flame.mixture_fraction("Bilger")[::-1]
+        Z = self._compute_mixture_fraction(self.flame.X)[::-1]
         cp = self.flame.cp_mass[::-1]
         return np.gradient(np.log(cp), Z)[::-1]
     
@@ -1009,7 +1040,7 @@ class FlameletTableGenerator:
                     continue
 
                 # Compute postprocessing data
-                Z = self.flame.mixture_fraction("Bilger")
+                Z = self._compute_mixture_fraction(self.flame.X)
                 chi, chi_st = self._compute_scalar_dissipation(Z)
                 interp_T = interpolate.interp1d(Z, self.flame.T)
                 T_st = float(interp_T(self.Z_st))
@@ -1207,7 +1238,7 @@ class FlameletTableGenerator:
                         continue
 
                     # Compute postprocessing data
-                    Z = self.flame.mixture_fraction("Bilger")
+                    Z = self._compute_mixture_fraction(self.flame.X)
                     chi, chi_st = self._compute_scalar_dissipation(Z)
                     interp_T = interpolate.interp1d(Z, self.flame.T)
                     T_st = float(interp_T(self.Z_st))
@@ -1453,7 +1484,7 @@ class FlameletTableGenerator:
         flamemaster_dir.mkdir(parents=True, exist_ok=True)
         filename = flamemaster_dir / f"{fuel_name}_{pressure_str}{chi_str}{tf_str}{to_str}{Tst_str}"
 
-        Z_flame = self.flame.mixture_fraction("Bilger")
+        Z_flame = self._compute_mixture_fraction(self.flame.X)
 
         if reinterp_Z:
             N_points = 500
@@ -1521,12 +1552,12 @@ class FlameletTableGenerator:
 
             # Write flame profiles
             f.write(f"body\n")
-            write_array(f, "Z", self.flame.mixture_fraction("Bilger"))
+            write_array(f, "Z", self._compute_mixture_fraction(self.flame.X))
             write_array(f, "temperature [K]", self.flame.T)
             for k in range(self.gas.n_species):
                 write_array(f, f"massfraction-{self.gas.species_names[k]}", self.flame.Y[k, :])
             write_array(f, "W", self.flame.mean_molecular_weight)
-            write_array(f, "ZBilger", self.flame.mixture_fraction("Bilger"))
+            write_array(f, "ZBilger", self._compute_mixture_fraction(self.flame.X))
             write_array(f, "chi [1/s]", solution["chi"])
             write_array(f, "density", self.flame.density)
             write_array(f, "lambda [W/m K]", self.flame.thermal_conductivity)
@@ -1640,7 +1671,7 @@ class FlameletTableGenerator:
                 self.flame.from_array(sol["state"])
 
                 # ZBilger [-]
-                Z_i = self.flame.mixture_fraction("Bilger")
+                Z_i = self._compute_mixture_fraction(self.flame.X)
                 data_interp_Z["ZBilger"][:, i] = Z.grid
 
                 # ROM [J/kg/K]
@@ -1873,7 +1904,7 @@ class FlameletTableGenerator:
 
             # Write the table to the HDF5 file in CharlesX format
             with h5py.File(str(filename) + f"_{h_id}.h5", "w") as f:
-                vlen = h5py.string_dtype('utf-8')
+                vlen = h5py.string_dtype('ascii')
                 # Header group
                 header = f.create_group("Header")
                 doubles = header.create_group("Doubles")
@@ -2081,7 +2112,7 @@ class FlameletTableGenerator:
         if self.flame is None:
             raise ValueError("Flame has not been initialized. Please initialize the flame first.")
 
-        Z = self.flame.mixture_fraction("Bilger")
+        Z = self._compute_mixture_fraction(self.flame.X)
         T = self.flame.T
 
         fig, ax = plt.subplots()
