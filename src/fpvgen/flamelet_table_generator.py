@@ -1883,9 +1883,11 @@ class FlameletTableGenerator:
                 header.create_dataset("Number of dimensions", data=[3])
                 header.create_dataset("Number of variables", data=[len(vars)])
                 strings = header.create_group("Strings")
+                strings.attrs["Number of strings"] = 2
                 strings.create_dataset("String_0", data=["Combustion Model", "FPVA"])
                 strings.create_dataset("String_1", data=["Table Type", "COEFF"])
-                header.create_dataset("Variable Names", data=vars)
+                header.create_dataset("Variable Names", 
+                                      data=np.array(vars, dtype=h5py.string_dtype(encoding='utf-8')))
 
                 # Data dataset
                 n_tot = dims[0] * dims[1] * dims[2]
