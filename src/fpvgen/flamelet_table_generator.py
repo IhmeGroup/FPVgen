@@ -1900,9 +1900,9 @@ class FlameletTableGenerator:
 
                 # Coordinates group
                 coords = f.create_group("Coordinates")
-                Z.write_hdf5(coords, "Coor_0", dtype='f4')
-                Q.write_hdf5(coords, "Coor_1", dtype='f4')
-                L.write_hdf5(coords, "Coor_2", dtype='f4')
+                Z.write_hdf5(coords, "Coor_0")
+                Q.write_hdf5(coords, "Coor_1")
+                L.write_hdf5(coords, "Coor_2")
 
     def learn_strain_chi_st_mapping(self, output_file: Optional[str] = None):
         """Learn a mapping between strain rate and scalar dissipation rate at stoichiometry.

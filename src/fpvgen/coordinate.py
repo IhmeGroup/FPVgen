@@ -70,12 +70,13 @@ class Coordinate:
             group (h5py.Group): The HDF5 group to write to.
             dataset_name (str): The name of the dataset.
         """
-        group.create_dataset(dataset_name, data=self.grid)
-        group.attrs["Name"] = self.name
-        group.attrs["Type"] = self.type.value
-        group.attrs["Lower bound"] = self.lower_bound
-        group.attrs["Upper bound"] = self.upper_bound
-        group.attrs["Size"] = self.size
+        ds = group.create_dataset(dataset_name, data=self.grid.astype('f4'))
+        ds.attrs["Name"] = self.name
+        ds.attrs["Type"] = self.type.value
+        ds.attrs["Lower bound"] = self.lower_bound
+        ds.attrs["Upper bound"] = self.upper_bound
+        ds.attrs["Size"] = self.size
+        return ds
 
 
 class CoordinateNonSpecific(Coordinate):
@@ -151,8 +152,8 @@ class CoordinatePowerLaw(Coordinate):
             group (h5py.Group): The HDF5 group to write to.
             dataset_name (str): The name of the dataset.
         """
-        super().write_hdf5(group, dataset_name)
-        group.attrs["Growth rate"] = self.growth_rate
+        ds = super().write_hdf5(group, dataset_name)
+        ds.attrs["Growth rate"] = self.growth_rate
 
 
 class CoordinateTwoLinear(Coordinate):
@@ -198,9 +199,9 @@ class CoordinateTwoLinear(Coordinate):
             group (h5py.Group): The HDF5 group to write to.
             dataset_name (str): The name of the dataset.
         """
-        super().write_hdf5(group, dataset_name)
-        group.attrs["i_cut"] = self.size1
-        group.attrs["z_cut"] = self.middle
+        ds = super().write_hdf5(group, dataset_name)
+        ds.attrs["i_cut"] = self.size1
+        ds.attrs["z_cut"] = self.middle
 
 
 class CoordinateLinearThenStretched(Coordinate):
@@ -257,6 +258,6 @@ class CoordinateLinearThenStretched(Coordinate):
             group (h5py.Group): The HDF5 group to write to.
             dataset_name (str): The name of the dataset.
         """
-        super().write_hdf5(group, dataset_name)
-        group.attrs["i_cut"] = self.size1
-        group.attrs["z_cut"] = self.middle
+        ds = super().write_hdf5(group, dataset_name)
+        ds.attrs["i_cut"] = self.size1
+        ds.attrs["z_cut"] = self.middle
