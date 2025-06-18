@@ -365,7 +365,11 @@ class FlameletTableGenerator:
         v_ox = self.flame.oxidizer_inlet.mdot / rho_ox
         return 2 * (v_fuel + v_ox) / self.width
 
-    def _initialize_flame(self, chi_st: float, grid: Optional[np.ndarray] = None) -> None:
+    def _initialize_flame(
+        self,
+        chi_st: float,
+        grid: Optional[np.ndarray] = None
+    ) -> None:
         """Set up the initial counterflow diffusion flame configuration.
 
         Args:
@@ -1001,7 +1005,7 @@ class FlameletTableGenerator:
         self.logger.info(f"Completed {len(data)} points on the extinction branch")
         return data
 
-    def save_solution(self, output_dir: Path, solution_index: int):
+    def save_solution(self, output_dir: Path, solution_index: int) -> None:
         """Save a single solution to the HDF5 files.
 
         Saves both the flame profiles and associated metadata for a single solution.
@@ -1072,7 +1076,7 @@ class FlameletTableGenerator:
         # Write flame profile
         solution["state"].save(solutions_file, name=state_name, overwrite=True)
 
-    def save_all_solutions(self, output_dir: Path):
+    def save_all_solutions(self, output_dir: Path) -> None:
         """Save all computed solutions to HDF5 files.
 
         Args:
@@ -1151,7 +1155,7 @@ class FlameletTableGenerator:
         output_dir: Path,
         solution_index: int = -1,
         reinterp_Z: bool = True,
-    ):
+    ) -> None:
         """Write FlameMaster output files for a single solution.
 
         Args:
@@ -1290,7 +1294,8 @@ class FlameletTableGenerator:
         igniting_table: bool = False,
         include_species_mass_fractions: Union[str, List[str]] = [],
         include_species_production_rates: Union[str, List[str]] = [],
-    ):
+        include_energy_enthalpy_components: bool = False,
+    ) -> None:
         """Assemble a Flamelet Progress Variable (FPV) table and write it in CharlesX format.
 
         Args:
@@ -1300,6 +1305,7 @@ class FlameletTableGenerator:
             igniting_table: Whether to assemble an igniting table
             include_species_mass_fractions: List of species for which to include mass fractions
             include_species_production_rates: List of species for which to include production rates
+            include_energy_enthalpy_components: Whether to include energy and enthalpy components
         """
         # Build filename
         fuel_str = "".join([key for key in self.fuel_inlet.composition.keys()])
@@ -1329,8 +1335,6 @@ class FlameletTableGenerator:
             "ROM",
             "T0",
             "E0",
-            "E0_CHEM",
-            "E0_SENS",
             "GAMMA0",
             "AGAMMA",
             "MU0",
@@ -1345,6 +1349,8 @@ class FlameletTableGenerator:
         vars += ["ZBilger"]
         vars += include_species_mass_fractions
         vars += ["SRC_" + sp for sp in include_species_production_rates]
+        if include_energy_enthalpy_components:
+            vars += ["E_CHEM", "E0_SENS", "H0", "H0_SENS"]
         vars += ["TA"]
         data_interp_Z = {var: np.zeros((dims[0], N_sol)) for var in vars}
 
@@ -1380,23 +1386,7 @@ class FlameletTableGenerator:
             interp = build_interp(Z_i, E0_i)
             data_interp_Z["E0"][:, i] = interp(Z.grid)
 
-            # E0_CHEM [J/kg]
-            E0_CHEM_i = np.zeros_like(self.flame.grid)
-            for j in range(len(self.flame.grid)):
-                self.gas.TPY = 298.15, self.flame.P, self.flame.Y[:, j]
-                E0_CHEM_i[j] = (
-                    np.dot(self.gas.standard_enthalpies_RT, self.gas.X)
-                    * ct.gas_constant
-                    * self.gas.T
-                    / self.gas.mean_molecular_weight
-                )
-            interp = build_interp(Z_i, E0_CHEM_i)
-            data_interp_Z["E0_CHEM"][:, i] = interp(Z.grid)
 
-            # E0_SENS [J/kg]
-            E0_SENS_i = E0_i - E0_CHEM_i
-            interp = build_interp(Z_i, E0_SENS_i)
-            data_interp_Z["E0_SENS"][:, i] = interp(Z.grid)
 
             # Compute derivatives via energy perturbation
             rho0deltaE = 5000.0
@@ -1502,6 +1492,35 @@ class FlameletTableGenerator:
                 interp = build_interp(Z_i, SRC_i)
                 data_interp_Z["SRC_" + sp][:, i] = interp(Z.grid)
             
+            if include_energy_enthalpy_components:
+                # E_CHEM [J/kg]
+                E_CHEM_i = np.zeros_like(self.flame.grid)
+                for j in range(len(self.flame.grid)):
+                    self.gas.TPY = 298.15, self.flame.P, self.flame.Y[:, j]
+                    E_CHEM_i[j] = (
+                        np.dot(self.gas.standard_enthalpies_RT, self.gas.X)
+                        * ct.gas_constant
+                        * self.gas.T
+                        / self.gas.mean_molecular_weight
+                    )
+                interp = build_interp(Z_i, E_CHEM_i)
+                data_interp_Z["E_CHEM"][:, i] = interp(Z.grid)
+
+                # E0_SENS [J/kg]
+                E0_SENS_i = E0_i - E_CHEM_i
+                interp = build_interp(Z_i, E0_SENS_i)
+                data_interp_Z["E0_SENS"][:, i] = interp(Z.grid)
+
+                # H0 [J/kg]
+                H0_i = self.flame.enthalpy_mass
+                interp = build_interp(Z_i, H0_i)
+                data_interp_Z["H0"][:, i] = interp(Z.grid)
+
+                # H0_SENS [J/kg]
+                H0_SENS_i = H0_i - E_CHEM_i
+                interp = build_interp(Z_i, H0_SENS_i)
+                data_interp_Z["H0_SENS"][:, i] = interp(Z.grid)
+            
             # Activation temperature [K]
             TA_i = np.log(SRC_PROG_p / SRC_PROG_m) / ((1.0 / T0_p) - (1.0 / T0_m))
             TA_i = np.maximum(TA_i, 0.0)
@@ -1591,26 +1610,41 @@ class FlameletTableGenerator:
         
         # Write the table to the HDF5 file in CharlesX format
         with h5py.File(filename, "w") as f:
+            # Create variable-length string dtype with ASCII encoding and space padding
+            str_type_id = h5py.h5t.TypeID.copy(h5py.h5t.C_S1)
+            str_type_id.set_size(h5py.h5t.VARIABLE)
+            str_type_id.set_cset(h5py.h5t.CSET_ASCII)
+            str_type_id.set_strpad(h5py.h5t.STR_SPACEPAD)
+            str_dtype = h5py.Datatype(str_type_id)
+            
             # Header group
             header = f.create_group("Header")
+
+            # Doubles subgroup
             doubles = header.create_group("Doubles")
-            double_0 = doubles.create_dataset("Double_0", data=["Reference Pressure"])
-            double_0.attrs["Value"] = [self.pressure]
-            double_1 = doubles.create_dataset("Double_1", data=["Version"])
-            double_1.attrs["Value"] = [0.2]
-            header.create_dataset("Number of dimensions", data=[3])
-            header.create_dataset("Number of variables", data=[len(vars)])
+            doubles.attrs["Number of doubles"] = [np.int32(2)]
+            double_0 = doubles.create_dataset("Double_0", data=["Reference Pressure"], dtype=str_dtype)
+            double_0.attrs["Value"] = [np.float64(self.pressure)]
+            double_1 = doubles.create_dataset("Double_1", data=["Version"], dtype=str_dtype)
+            double_1.attrs["Value"] = [np.float64(0.2)]
+            
+            # Strings subgroup
             strings = header.create_group("Strings")
-            strings.create_dataset("String_0", data=["Combustion Model", "FPVA"])
-            strings.create_dataset("String_1", data=["Table Type", "COEFF"])
-            header.create_dataset("Variable Names", data=vars)
+            strings.attrs["Number of strings"] = [np.int32(2)]
+            strings.create_dataset("String_0", data=["Combustion Model", "FPVA"], dtype=str_dtype)
+            strings.create_dataset("String_1", data=["Table Type", "COEFF"], dtype=str_dtype)
+            
+            # Header datasets
+            header.create_dataset("Number of dimensions", data=[3], dtype=np.int32)
+            header.create_dataset("Number of variables", data=[len(vars)], dtype=np.int32)
+            header.create_dataset("Variable Names", data=vars, dtype=str_dtype)
 
             # Data dataset
             n_tot = dims[0] * dims[1] * dims[2]
-            data_raw = np.empty((n_tot * len(vars)))
+            data_raw = np.empty((n_tot * len(vars)), dtype=np.float32)
             for i, var in enumerate(vars):
                 data_raw[i * n_tot : (i + 1) * n_tot] = self.data_table[var].ravel(order="C")
-            f.create_dataset("Data", data=data_raw)
+            f.create_dataset("Data", data=data_raw, dtype=np.float32)
 
             # Coordinates group
             coords = f.create_group("Coordinates")

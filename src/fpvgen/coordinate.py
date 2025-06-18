@@ -3,6 +3,7 @@ import numpy as np
 import h5py
 
 
+
 class CoordType(Enum):
     """Enumeration of possible coordinate types for flamelet table generation"""
 
@@ -25,6 +26,12 @@ class Coordinate:
     name: str
     type: CoordType
     grid: np.ndarray
+
+    str_type_id = h5py.h5t.TypeID.copy(h5py.h5t.C_S1)
+    str_type_id.set_size(h5py.h5t.VARIABLE)
+    str_type_id.set_cset(h5py.h5t.CSET_ASCII)
+    str_type_id.set_strpad(h5py.h5t.STR_SPACEPAD)
+    str_dtype = h5py.Datatype(str_type_id)
 
     def __init__(self, name: str):
         """Initialize the Coordinate class.
@@ -70,12 +77,12 @@ class Coordinate:
             group (h5py.Group): The HDF5 group to write to.
             dataset_name (str): The name of the dataset.
         """
-        group.create_dataset(dataset_name, data=self.grid)
-        group.attrs["Name"] = self.name
-        group.attrs["Type"] = self.type.value
-        group.attrs["Lower bound"] = self.lower_bound
-        group.attrs["Upper bound"] = self.upper_bound
-        group.attrs["Size"] = self.size
+        dataset = group.create_dataset(dataset_name, data=self.grid)
+        dataset.attrs.create("Name", data=[self.name], dtype=self.str_dtype)
+        dataset.attrs["Type"] = [np.int32(self.type.value)]
+        dataset.attrs["Lower bound"] = [np.float64(self.lower_bound)]
+        dataset.attrs["Upper bound"] = [np.float64(self.upper_bound)]
+        dataset.attrs["Size"] = [np.int32(self.size)]
 
 
 class CoordinateNonSpecific(Coordinate):
@@ -152,7 +159,8 @@ class CoordinatePowerLaw(Coordinate):
             dataset_name (str): The name of the dataset.
         """
         super().write_hdf5(group, dataset_name)
-        group.attrs["Growth rate"] = self.growth_rate
+        dataset = group[dataset_name]
+        dataset.attrs["Growth rate"] = [np.float64(self.growth_rate)]
 
 
 class CoordinateTwoLinear(Coordinate):
@@ -199,8 +207,9 @@ class CoordinateTwoLinear(Coordinate):
             dataset_name (str): The name of the dataset.
         """
         super().write_hdf5(group, dataset_name)
-        group.attrs["i_cut"] = self.size1
-        group.attrs["z_cut"] = self.middle
+        dataset = group[dataset_name]
+        dataset.attrs["i_cut"] = [np.int32(self.size1)]
+        dataset.attrs["z_cut"] = [np.float64(self.middle)]
 
 
 class CoordinateLinearThenStretched(Coordinate):
@@ -258,5 +267,6 @@ class CoordinateLinearThenStretched(Coordinate):
             dataset_name (str): The name of the dataset.
         """
         super().write_hdf5(group, dataset_name)
-        group.attrs["i_cut"] = self.size1
-        group.attrs["z_cut"] = self.middle
+        dataset = group[dataset_name]
+        dataset.attrs["i_cut"] = [np.int32(self.size1)]
+        dataset.attrs["z_cut"] = [np.float64(self.middle)]
