@@ -820,9 +820,9 @@ class FlameletTableGenerator:
                 strain_rate_increasing = False
                 loc_algo_right = "next_to_max"
                 delta_T_type = "relative"
-                target_delta_T_max = 0.01
-                max_delta_T = 0.02
-                delta_T = 0.001
+                target_delta_T_max = 0.02
+                max_delta_T = 0.05
+                delta_T = 0.005
             step_data = {
                 "T_max": T_max,
                 "T_st": T_st,
