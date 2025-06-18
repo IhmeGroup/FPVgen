@@ -1873,34 +1873,36 @@ class FlameletTableGenerator:
 
             # Write the table to the HDF5 file in CharlesX format
             with h5py.File(str(filename) + f"_{h_id}.h5", "w") as f:
+                vlen = h5py.string_dtype('utf-8')
                 # Header group
                 header = f.create_group("Header")
                 doubles = header.create_group("Doubles")
-                double_0 = doubles.create_dataset("Double_0", data=["Reference Pressure"])
-                double_0.attrs["Value"] = [self.pressure]
-                double_1 = doubles.create_dataset("Double_1", data=["Version"])
-                double_1.attrs["Value"] = [0.2]
-                header.create_dataset("Number of dimensions", data=[3])
-                header.create_dataset("Number of variables", data=[len(vars)])
+                doubles.attrs["Number of doubles"] = 2
+                double_0 = doubles.create_dataset("Double_0", data=np.array(["Reference Pressure"], dtype=vlen))
+                double_0.attrs["Value"] = np.float64(self.pressure)
+                double_1 = doubles.create_dataset("Double_1", data=np.array(["Version"], dtype=vlen))
+                double_1.attrs["Value"] = np.float64(0.2)
+                header.create_dataset("Number of dimensions", data=np.int32(3))
+                header.create_dataset("Number of variables", data=np.int32(len(vars)))
                 strings = header.create_group("Strings")
                 strings.attrs["Number of strings"] = 2
-                strings.create_dataset("String_0", data=["Combustion Model", "FPVA"])
-                strings.create_dataset("String_1", data=["Table Type", "COEFF"])
+                strings.create_dataset("String_0", data=np.array(["Combustion Model", "FPVA"], dtype=vlen))
+                strings.create_dataset("String_1", data=np.array(["Table Type", "COEFF"], dtype=vlen))
                 header.create_dataset("Variable Names", 
-                                      data=np.array(vars, dtype=h5py.string_dtype(encoding='utf-8')))
+                                      data=np.array(vars, dtype=vlen))
 
                 # Data dataset
                 n_tot = dims[0] * dims[1] * dims[2]
                 data_raw = np.empty((n_tot * len(vars)))
                 for i, var in enumerate(vars):
                     data_raw[i * n_tot : (i + 1) * n_tot] = self.data_table[var][:, :, :, h_id].ravel(order="C")
-                f.create_dataset("Data", data=data_raw)
+                f.create_dataset("Data", data=data_raw.astype('f4'))
 
                 # Coordinates group
                 coords = f.create_group("Coordinates")
-                Z.write_hdf5(coords, "Coor_0")
-                Q.write_hdf5(coords, "Coor_1")
-                L.write_hdf5(coords, "Coor_2")
+                Z.write_hdf5(coords, "Coor_0", dtype='f4')
+                Q.write_hdf5(coords, "Coor_1", dtype='f4')
+                L.write_hdf5(coords, "Coor_2", dtype='f4')
 
     def learn_strain_chi_st_mapping(self, output_file: Optional[str] = None):
         """Learn a mapping between strain rate and scalar dissipation rate at stoichiometry.
