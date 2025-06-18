@@ -9,6 +9,7 @@ import numpy as np
 import cantera as ct
 from scipy import interpolate
 from scipy.special import erfcinv
+from scipy.signal import find_peaks
 
 from fpvgen import coordinate
 
@@ -527,6 +528,77 @@ class FlameletTableGenerator:
         if solve:
             self.logger.info("Computing the solution in the new domain")
             self.flame.solve(loglevel=self.solver_loglevel, auto=True)
+    
+    def _update_control_points(
+        self,
+        loc_algo_left: str = "spacing",
+        loc_algo_right: str = "spacing",
+        spacing: float = 0.6,
+        delta_T_type: str = "absolute",
+        delta_T: float = 20.0,
+    ) -> None:
+        """Update the left and right control points for temperature control.
+        
+        Computes the left and right control temperatures based on the specified
+        location algorithms and sets them in the flame object. The control points
+        are adjusted based on the specified delta_T type (absolute or relative).
+
+        Args:
+            loc_algo_left: Algorithm to determine left control point location
+                Options: "spacing", "max_dTdx", "next_to_max"
+            loc_algo_right: Algorithm to determine right control point location
+                Options: "spacing", "max_dTdx", "next_to_max"
+            spacing: Fraction of the maximum temperature to set control points
+            delta_T_type: Type of delta_T adjustment ("absolute" or "relative")
+            delta_T: Temperature change applied to control points
+        """
+        # Update control temperatures
+        if loc_algo_left == "spacing":
+            # Sets it such that the left and right are at a temperature of spacing * max(T) 
+            control_temperature_left = np.min(self.flame.T) + spacing * (np.max(self.flame.T) - np.min(self.flame.T))
+
+        elif loc_algo_left == "max_dTdx":
+            # Find the left and right points with the maximum dT/dx and set them as the locations to apply temperature control
+            dTdx = np.diff(self.flame.T)/np.diff(self.flame.grid)
+            peaks, _ = find_peaks(dTdx) # find the index of the peaks
+            peak_values = dTdx[peaks] # find the values of the peaks
+            top2_idx_in_peaks = np.argsort(peak_values)[-2:] # find the largest 2 peaks in the array and return their index
+            top2_peaks = peaks[top2_idx_in_peaks] # find the index of the largest 2 peaks in the original array
+            top2_peaks_sorted = np.sort(top2_peaks) # sort the indices of the largest 2 peaks to ensure that the [0] index is the left peak and [1] index is the right peak
+            control_temperature_left = self.flame.T[top2_peaks_sorted[0]]
+        
+        elif loc_algo_left == "next_to_max":
+            # Sets it such that the control temperature points are always the grid points next to the maximum T
+            max_T_idx = np.argmax(self.flame.T)
+            control_temperature_left = self.flame.T[max_T_idx - 1]
+        
+        if loc_algo_right == "spacing":
+            # Sets it such that the left and right are at a temperature of spacing * max(T) 
+            control_temperature_right  = np.min(self.flame.T) + spacing * (np.max(self.flame.T) - np.min(self.flame.T))
+
+        elif loc_algo_right == "max_dTdx":
+            # Find the left and right points with the maximum dT/dx and set them as the locations to apply temperature control
+            dTdx = np.diff(self.flame.T)/np.diff(self.flame.grid)
+            peaks, _ = find_peaks(dTdx) # find the index of the peaks
+            peak_values = dTdx[peaks] # find the values of the peaks
+            top2_idx_in_peaks = np.argsort(peak_values)[-2:] # find the largest 2 peaks in the array and return their index
+            top2_peaks = peaks[top2_idx_in_peaks] # find the index of the largest 2 peaks in the original array
+            top2_peaks_sorted = np.sort(top2_peaks) # sort the indices of the largest 2 peaks to ensure that the [0] index is the left peak and [1] index is the right peak
+            control_temperature_right = self.flame.T[top2_peaks_sorted[1]]
+        
+        elif loc_algo_right == "next_to_max":
+            # Sets it such that the control temperature points are always the grid points next to the maximum T
+            max_T_idx = np.argmax(self.flame.T)
+            control_temperature_right = self.flame.T[max_T_idx + 1]
+
+        self.flame.set_left_control_point(control_temperature_left)
+        self.flame.set_right_control_point(control_temperature_right)
+        if delta_T_type == "absolute":
+            self.flame.left_control_point_temperature -= delta_T
+            self.flame.right_control_point_temperature -= delta_T
+        elif delta_T_type == "relative":
+            self.flame.left_control_point_temperature -= self.flame.left_control_point_temperature * delta_T
+            self.flame.right_control_point_temperature -= self.flame.right_control_point_temperature * delta_T
 
     def compute_s_curve(
         self,
@@ -581,9 +653,12 @@ class FlameletTableGenerator:
         output_dir: Optional[Path] = None,
         restart_from: Optional[int] = None,
         n_max: int = 5000,
+        loc_algo_left: str = "spacing",
+        loc_algo_right: str = "spacing",
         initial_spacing: float = 0.6,
-        temperature_increment: float = 20.0,
-        max_increment: float = 100.0,
+        delta_T_type: str = "absolute",
+        delta_T: float = 20.0,
+        max_delta_T: float = 100.0,
         target_delta_T_max: float = 20.0,
         max_error_count: int = 3,
         strain_rate_tol: float = 0.10,
@@ -597,11 +672,13 @@ class FlameletTableGenerator:
 
         Args:
             output_dir: Directory to save solution files
-            restart_from: Optional solution index to restart from if continuing a previous calculation
             n_max: Maximum number of iterations before stopping
+            loc_algo_left: Algorithm to use to calculate left control point
+            loc_algo_right: Algorithm to use to calculate right control point
             initial_spacing: Initial control point spacing for stable branch (0-1)
-            temperature_increment: Initial temperature increment between solutions [K]
-            max_increment: Maximum allowed temperature increment [K]
+            delta_T_type: Choose whether to enforce absolute delta_T [K] or relative delta_T [fraction]
+            delta_T: Initial temperature change between solutions [K]
+            max_delta_T: Maximum allowed delta_T [K]
             target_delta_T_max: Target maximum temperature change per step [K]
             max_error_count: Maximum number of successive solver errors before stopping
             strain_rate_tol: Tolerance for minimum strain rate relative to maximum
@@ -642,20 +719,23 @@ class FlameletTableGenerator:
             # Restore flame state and get previous temperature increment
             restart_solution = self.solutions[restart_from]
             self.flame.from_array(restart_solution["state"])
-            temperature_increment = restart_solution["metadata"]["Tc_increment"]
 
             # Initialize data with previous solutions
             data = [sol["metadata"] for sol in self.solutions[: restart_from + 1]]
 
-            self.logger.info(f"Restarting from solution {restart_from} with T_increment = {temperature_increment:.2f}")
+            self.logger.info(f"Restarting from solution {restart_from}")
             start_iteration = restart_from + 1
 
         else:
             self.logger.info("Computing the initial solution")
             self.flame.solve(loglevel=self.solver_loglevel, auto=True)
             T_max = np.max(self.flame.T)
+            Z = self.flame.mixture_fraction("Bilger")
+            chi, chi_st = self._compute_scalar_dissipation(Z)
+            chi_st_max_glob = chi_st
             strain_rate_max = self.flame.strain_rate("max")
-            strain_rate_max_glob = strain_rate_max
+            strain_rate_max_max = strain_rate_max
+            strain_rate_max_min = strain_rate_max
             data = []
             start_iteration = 0
 
@@ -663,6 +743,7 @@ class FlameletTableGenerator:
         error_count = 0
         branch_id = 1
         spacing = initial_spacing
+        strain_rate_increasing = True
         for i in range(start_iteration, n_max):
             # Update flame width if we are attempting a new point
             if error_count == 0:
@@ -672,13 +753,17 @@ class FlameletTableGenerator:
 
             backup_state = self.flame.to_array()
 
-            # Update control temperatures
-            control_temperature = np.min(self.flame.T) + spacing * (np.max(self.flame.T) - np.min(self.flame.T))
-            self.logger.debug(f"Iteration {i}: Control temperature = {control_temperature:.2f} K")
-            self.flame.set_left_control_point(control_temperature)
-            self.flame.set_right_control_point(control_temperature)
-            self.flame.left_control_point_temperature -= temperature_increment
-            self.flame.right_control_point_temperature -= temperature_increment
+            # Update control points
+            self._update_control_points(
+                loc_algo_left=loc_algo_left,
+                loc_algo_right=loc_algo_right,
+                spacing=spacing,
+                delta_T_type=delta_T_type,
+                delta_T=delta_T,
+            )
+            self.logger.debug(f"Iteration {i}: Control temperatures = [",
+                              f"{self.flame.left_control_point_temperature:.2f}, "
+                              f"{self.flame.right_control_point_temperature:.2f}]")
             self.flame.clear_stats()
             T_threshold = 10.0
             if (
@@ -695,9 +780,9 @@ class FlameletTableGenerator:
 
                 # Adjust temperature increment based on convergence
                 if abs(max(self.flame.T) - T_max) < 0.8 * target_delta_T_max:
-                    temperature_increment = min(temperature_increment + 3, max_increment)
+                    delta_T = min(delta_T + 3, max_delta_T)
                 elif abs(max(self.flame.T) - T_max) > target_delta_T_max:
-                    temperature_increment *= 0.9 * target_delta_T_max / abs(max(self.flame.T) - T_max)
+                    delta_T *= 0.9 * target_delta_T_max / abs(max(self.flame.T) - T_max)
                 error_count = 0
 
             except ct.CanteraError as err:
@@ -705,35 +790,43 @@ class FlameletTableGenerator:
 
                 # Restore previous solution and reduce increment
                 self.flame.from_array(backup_state)
-                temperature_increment = 0.7 * temperature_increment
+                delta_T = 0.7 * delta_T
                 error_count += 1
                 if error_count > max_error_count:
-                    if strain_rate_max / strain_rate_max_glob < strain_rate_tol:
+                    if strain_rate_max / strain_rate_max_max < strain_rate_tol:
                         self.logger.info(
                             "SUCCESS! Traversed unstable branch down to "
-                            f"{100 * strain_rate_max / strain_rate_max_glob:.4f}% of the maximum strain rate."
+                            f"{100 * strain_rate_max / strain_rate_max_max:.4f}% of the maximum strain rate."
                         )
                     else:
                         self.logger.warning(f"FAILURE! Stopping after {error_count} successive solver errors.")
                     break
                 self.logger.warning(
-                    f"Solver did not converge on iteration {i}. " f"Trying again with dT = {temperature_increment:.2f}"
+                    f"Solver did not converge on iteration {i}. " f"Trying again with dT = {delta_T:.2f}"
                 )
                 continue
 
             # Compute postprocessing data
             Z = self.flame.mixture_fraction("Bilger")
             chi, chi_st = self._compute_scalar_dissipation(Z)
+            chi_st_max_glob = max(chi_st_max_glob, chi_st)
             interp_T = interpolate.interp1d(Z, self.flame.T)
             T_st = float(interp_T(self.Z_st))
             T_max = max(self.flame.T)
             width = self._measure_flame_thickness()
             strain_rate_max = self.flame.strain_rate("max")
             strain_rate_nom = self._strain_rate_nominal()
-            strain_rate_max_glob = max(strain_rate_max, strain_rate_max_glob)
-            if len(self.solutions) > 0 and chi_st < self.solutions[0]["metadata"]["chi_st"]:
-                branch_id += 1
+            strain_rate_max_max = max(strain_rate_max, strain_rate_max_max)
+            strain_rate_max_min = min(strain_rate_max, strain_rate_max_min)
+            if len(self.solutions) > 0 and strain_rate_increasing and strain_rate_max < strain_rate_max_max:
                 self.logger.info(f"Turning point encountered")
+                branch_id += 1
+                strain_rate_increasing = False
+                loc_algo_right = "next_to_max"
+                delta_T_type = "relative"
+                target_delta_T_max = 0.02
+                max_delta_T = 0.05
+                delta_T = 0.005
             step_data = {
                 "T_max": T_max,
                 "T_st": T_st,
@@ -743,7 +836,7 @@ class FlameletTableGenerator:
                 "total_heat_release_rate": np.trapz(self.flame.heat_release_rate, self.flame.grid),
                 "n_points": len(self.flame.grid),
                 "flame_width": width,
-                "Tc_increment": temperature_increment,
+                "Tc_increment": delta_T,
                 "branch_id": branch_id,
                 "time_steps": sum(self.flame.time_step_stats),
                 "eval_count": sum(self.flame.eval_count_stats),
@@ -1060,15 +1153,17 @@ class FlameletTableGenerator:
     def write_FlameMaster(
         self,
         output_dir: Path,
+        solution_index: int = -1,
         reinterp_Z: bool = True,
     ) -> None:
         """Write FlameMaster output files for a single solution.
 
         Args:
             output_dir: Directory path where files will be saved
+            solution_index: Index of the solution to write (default: last solution)
             reinterp_Z: Whether to reinterpolate the solution onto a new Z grid. This prevents issues related to dZ=0 portions of the solution.
         """
-        solution = self.solutions[-1]
+        solution = self.solutions[solution_index]
 
         # Build filename
         fuel_name = [key for key in self.fuel_inlet.composition.keys()][0]
