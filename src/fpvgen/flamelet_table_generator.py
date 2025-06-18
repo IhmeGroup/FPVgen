@@ -820,11 +820,9 @@ class FlameletTableGenerator:
                 strain_rate_increasing = False
                 loc_algo_right = "next_to_max"
                 delta_T_type = "relative"
-                delta_T = 0.005
-            if len(self.solutions) > 0 and not strain_rate_increasing and strain_rate_max > strain_rate_max_min:
-                self.logger.info(f"Turning point encountered")
-                branch_id += 1
-                strain_rate_increasing = True
+                target_delta_T_max = 0.01
+                max_delta_T = 0.02
+                delta_T = 0.001
             step_data = {
                 "T_max": T_max,
                 "T_st": T_st,
